@@ -1,0 +1,407 @@
+{
+ "description": "IEEE 33-bus radial feeder",
+ "base": {
+  "S_base_kVA": 10000.0,
+  "V_base_kV": 12.66
+ },
+ "load_class_legend": {
+  "0": "substation",
+  "1": "industrial",
+  "2": "commercial",
+  "3": "residential"
+ },
+ "buses": [
+  {
+   "bus": 1,
+   "P_load_kW": 0.0,
+   "Q_load_kVAr": 0.0,
+   "load_class": 0
+  },
+  {
+   "bus": 2,
+   "P_load_kW": 100.0,
+   "Q_load_kVAr": 60.0,
+   "load_class": 3
+  },
+  {
+   "bus": 3,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 3
+  },
+  {
+   "bus": 4,
+   "P_load_kW": 120.0,
+   "Q_load_kVAr": 80.0,
+   "load_class": 3
+  },
+  {
+   "bus": 5,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 30.0,
+   "load_class": 3
+  },
+  {
+   "bus": 6,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 20.0,
+   "load_class": 3
+  },
+  {
+   "bus": 7,
+   "P_load_kW": 200.0,
+   "Q_load_kVAr": 100.0,
+   "load_class": 3
+  },
+  {
+   "bus": 8,
+   "P_load_kW": 200.0,
+   "Q_load_kVAr": 100.0,
+   "load_class": 3
+  },
+  {
+   "bus": 9,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 20.0,
+   "load_class": 3
+  },
+  {
+   "bus": 10,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 20.0,
+   "load_class": 3
+  },
+  {
+   "bus": 11,
+   "P_load_kW": 45.0,
+   "Q_load_kVAr": 30.0,
+   "load_class": 3
+  },
+  {
+   "bus": 12,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 35.0,
+   "load_class": 3
+  },
+  {
+   "bus": 13,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 35.0,
+   "load_class": 3
+  },
+  {
+   "bus": 14,
+   "P_load_kW": 120.0,
+   "Q_load_kVAr": 80.0,
+   "load_class": 3
+  },
+  {
+   "bus": 15,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 10.0,
+   "load_class": 3
+  },
+  {
+   "bus": 16,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 20.0,
+   "load_class": 3
+  },
+  {
+   "bus": 17,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 20.0,
+   "load_class": 3
+  },
+  {
+   "bus": 18,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 3
+  },
+  {
+   "bus": 19,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 2
+  },
+  {
+   "bus": 20,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 2
+  },
+  {
+   "bus": 21,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 2
+  },
+  {
+   "bus": 22,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 2
+  },
+  {
+   "bus": 23,
+   "P_load_kW": 90.0,
+   "Q_load_kVAr": 50.0,
+   "load_class": 2
+  },
+  {
+   "bus": 24,
+   "P_load_kW": 420.0,
+   "Q_load_kVAr": 200.0,
+   "load_class": 2
+  },
+  {
+   "bus": 25,
+   "P_load_kW": 420.0,
+   "Q_load_kVAr": 200.0,
+   "load_class": 2
+  },
+  {
+   "bus": 26,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 25.0,
+   "load_class": 1
+  },
+  {
+   "bus": 27,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 25.0,
+   "load_class": 1
+  },
+  {
+   "bus": 28,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 20.0,
+   "load_class": 1
+  },
+  {
+   "bus": 29,
+   "P_load_kW": 120.0,
+   "Q_load_kVAr": 70.0,
+   "load_class": 1
+  },
+  {
+   "bus": 30,
+   "P_load_kW": 200.0,
+   "Q_load_kVAr": 600.0,
+   "load_class": 1
+  },
+  {
+   "bus": 31,
+   "P_load_kW": 150.0,
+   "Q_load_kVAr": 70.0,
+   "load_class": 1
+  },
+  {
+   "bus": 32,
+   "P_load_kW": 210.0,
+   "Q_load_kVAr": 100.0,
+   "load_class": 1
+  },
+  {
+   "bus": 33,
+   "P_load_kW": 60.0,
+   "Q_load_kVAr": 40.0,
+   "load_class": 1
+  }
+ ],
+ "branches": [
+  {
+   "from": 1,
+   "to": 2,
+   "R_ohm": 0.0922,
+   "X_ohm": 0.047
+  },
+  {
+   "from": 2,
+   "to": 3,
+   "R_ohm": 0.493,
+   "X_ohm": 0.2511
+  },
+  {
+   "from": 3,
+   "to": 4,
+   "R_ohm": 0.366,
+   "X_ohm": 0.1864
+  },
+  {
+   "from": 4,
+   "to": 5,
+   "R_ohm": 0.3811,
+   "X_ohm": 0.1941
+  },
+  {
+   "from": 5,
+   "to": 6,
+   "R_ohm": 0.819,
+   "X_ohm": 0.707
+  },
+  {
+   "from": 6,
+   "to": 7,
+   "R_ohm": 0.1872,
+   "X_ohm": 0.6188
+  },
+  {
+   "from": 7,
+   "to": 8,
+   "R_ohm": 0.7114,
+   "X_ohm": 0.2351
+  },
+  {
+   "from": 8,
+   "to": 9,
+   "R_ohm": 1.03,
+   "X_ohm": 0.74
+  },
+  {
+   "from": 9,
+   "to": 10,
+   "R_ohm": 1.044,
+   "X_ohm": 0.74
+  },
+  {
+   "from": 10,
+   "to": 11,
+   "R_ohm": 0.1966,
+   "X_ohm": 0.065
+  },
+  {
+   "from": 11,
+   "to": 12,
+   "R_ohm": 0.3744,
+   "X_ohm": 0.1238
+  },
+  {
+   "from": 12,
+   "to": 13,
+   "R_ohm": 1.468,
+   "X_ohm": 1.155
+  },
+  {
+   "from": 13,
+   "to": 14,
+   "R_ohm": 0.5416,
+   "X_ohm": 0.7129
+  },
+  {
+   "from": 14,
+   "to": 15,
+   "R_ohm": 0.591,
+   "X_ohm": 0.526
+  },
+  {
+   "from": 15,
+   "to": 16,
+   "R_ohm": 0.7463,
+   "X_ohm": 0.545
+  },
+  {
+   "from": 16,
+   "to": 17,
+   "R_ohm": 1.289,
+   "X_ohm": 1.721
+  },
+  {
+   "from": 17,
+   "to": 18,
+   "R_ohm": 0.732,
+   "X_ohm": 0.574
+  },
+  {
+   "from": 2,
+   "to": 19,
+   "R_ohm": 0.164,
+   "X_ohm": 0.1565
+  },
+  {
+   "from": 19,
+   "to": 20,
+   "R_ohm": 1.5042,
+   "X_ohm": 1.3554
+  },
+  {
+   "from": 20,
+   "to": 21,
+   "R_ohm": 0.4095,
+   "X_ohm": 0.4784
+  },
+  {
+   "from": 21,
+   "to": 22,
+   "R_ohm": 0.7089,
+   "X_ohm": 0.9373
+  },
+  {
+   "from": 3,
+   "to": 23,
+   "R_ohm": 0.4512,
+   "X_ohm": 0.3083
+  },
+  {
+   "from": 23,
+   "to": 24,
+   "R_ohm": 0.898,
+   "X_ohm": 0.7091
+  },
+  {
+   "from": 24,
+   "to": 25,
+   "R_ohm": 0.896,
+   "X_ohm": 0.7011
+  },
+  {
+   "from": 6,
+   "to": 26,
+   "R_ohm": 0.203,
+   "X_ohm": 0.1034
+  },
+  {
+   "from": 26,
+   "to": 27,
+   "R_ohm": 0.2842,
+   "X_ohm": 0.1447
+  },
+  {
+   "from": 27,
+   "to": 28,
+   "R_ohm": 1.059,
+   "X_ohm": 0.9337
+  },
+  {
+   "from": 28,
+   "to": 29,
+   "R_ohm": 0.8042,
+   "X_ohm": 0.7006
+  },
+  {
+   "from": 29,
+   "to": 30,
+   "R_ohm": 0.5075,
+   "X_ohm": 0.2585
+  },
+  {
+   "from": 30,
+   "to": 31,
+   "R_ohm": 0.9744,
+   "X_ohm": 0.963
+  },
+  {
+   "from": 31,
+   "to": 32,
+   "R_ohm": 0.3105,
+   "X_ohm": 0.3619
+  },
+  {
+   "from": 32,
+   "to": 33,
+   "R_ohm": 0.341,
+   "X_ohm": 0.5302
+  }
+ ]
+}
