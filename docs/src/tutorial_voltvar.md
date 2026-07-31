@@ -23,6 +23,8 @@ RES  = joinpath("assets", "results")
 case = JSON3.read(read(joinpath(RES, "case.json"), String))
 runs = Dict(m => JSON3.read(read(joinpath(RES, "$m.json"), String))
             for m in ("bigm", "lambda", "heaviside"))
+# what each MILP solver actually did, from scripts/solver_benchmark.jl
+BENCH = JSON3.read(read(joinpath(RES, "benchmark", "index.json"), String))
 
 const NAMES = Dict("bigm" => "Big-M", "lambda" => "Lambda / SOS2", "heaviside" => "Heaviside")
 const ORDER = ["bigm", "lambda", "heaviside"]
@@ -52,6 +54,24 @@ iteration_table(m) = md(
     "|--:|--:|--:|--:|:--|",
     join(["| $(r.iter) | $(fmt(r.seconds, 2)) | $(fmt(r.objective, 6)) | " *
           "$(sci(r.residual)) | `$(r.status)` |" for r in runs[m].iterations], "\n"))
+
+ENC = Dict("bigm" => "Big-M", "lambda" => "Lambda / SOS2")
+bench_row(s, m) = first(r for r in BENCH.runs if r.solver == s && r.method == m)
+
+solver_table() = md(
+    "| solver | encoding | outcome | time (s) | budget (s) | what happened |",
+    "|:--|:--|:--|--:|--:|:--|",
+    join([let r = bench_row(s, m)
+              done   = r.outcome in ("completed", "max_iter")
+              secs   = done ? r.solve_seconds : r.wall_seconds
+              budget = s == BENCH.reference ? "—" : fmt(r.budget_seconds, 0)
+              detail =
+                  r.outcome == "completed" ? "converged in $(r.n_iterations) passes, proven optimal" :
+                  r.outcome == "withdrawn" ? "still on pass $(r.failed_at_iter) when the budget ran out" :
+                  r.outcome == "max_iter"  ? "hit the iteration cap without converging" :
+                  "`$(r.status)` on pass $(r.failed_at_iter)"
+              "| $s | $(ENC[m]) | **$(r.outcome)** | $(fmt(secs, 1)) | $budget | $detail |"
+          end for s in ("Gurobi", "HiGHS", "GLPK"), m in ("bigm", "lambda")][:], "\n"))
 
 deviation_table() = md(
     "| method | max ``\\lvert q^G_i - q_i(v_i)\\rvert`` (p.u.) |",
@@ -90,17 +110,61 @@ Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
 ```
 
 !!! warning "Solver choice is not free here"
-    The results on this page were produced with **Gurobi** (MILP) and **Ipopt** (NLP).
-    The open-source MILP solver HiGHS does *not* complete the successive-linearisation
-    loop on this case: it solves the first pass, then reports `INFEASIBLE` on the second,
-    for both `:bigm` and `:lambda`, at every MIP gap from `1e-3` down to `0`.
+    The results on this page were produced with **Gurobi** (MILP) and **Ipopt** (NLP),
+    and that is not an incidental choice. Of the three MILP solvers tried, only Gurobi
+    completes the successive-linearisation loop on this case — the two open-source ones
+    fail, in two different ways, and the section below reports exactly how.
 
-    The model is not infeasible — Gurobi solves the same sequence to proven optimality.
-    The likely cause is that the two solvers return *different* optimal solutions to the
-    first subproblem, which sends the linearisation down different trajectories; one of
-    them lands on a subproblem that is genuinely infeasible. That is a fragility of this
-    successive-linearisation scheme, not a defect in either solver, and it is worth
-    knowing about before building on it.
+    Gurobi is commercial software, but it is free for academic use. The
+    [Gurobi academic program](https://www.gurobi.com/academia/academic-program-and-licenses/)
+    offers a **Named-User License** (runs locally, no constant internet connection), a
+    **Web License Service (WLS)** licence usable from any internet-connected machine
+    including containers and cloud runners, and a **Site License** for a department or
+    whole university. All three are free to students, faculty and staff at accredited
+    degree-granting institutions for non-commercial teaching and research; the named-user
+    licence runs up to a year and is renewable while eligibility holds, and recent
+    graduates can keep access through the "Take Gurobi with You" programme.
+
+    **If no MILP licence is available at all, the `:heaviside` encoding needs only
+    Ipopt**, which is open source — and as the comparison below shows, it reaches the
+    same answer. That is a practical reason to care about an integer-free formulation,
+    quite apart from the theory.
+
+### What each MILP solver actually does
+
+The two MILP encodings were run under Gurobi, [HiGHS](https://highs.dev) and
+[GLPK](https://www.gnu.org/software/glpk/) by
+[`scripts/solver_benchmark.jl`](https://github.com/ra-emami/SmartInverterDOPF.jl/blob/main/scripts/solver_benchmark.jl).
+Gurobi goes first and sets the reference time. Each open-source solver is then given a
+budget of **20× the total time Gurobi needed for the same encoding**, and is *withdrawn*
+if it cannot finish inside it — a solver that needs twenty times the reference to do the
+same work is not a usable substitute here, and leaving it running would not change that.
+
+```@example tut
+solver_table()   # hide
+```
+
+Two quite different failure modes, and neither is a defect in the solver:
+
+- **HiGHS fails fast.** It solves the first pass, then reports `INFEASIBLE` on the
+  second, for both encodings, well inside its budget. The model is not infeasible —
+  Gurobi solves the same sequence to proven optimality, and earlier runs reproduced the
+  HiGHS failure at every MIP gap tried from ``10^{-3}`` down to ``0``. The likely cause
+  is that the two solvers return *different* optimal solutions to the first subproblem,
+  which sends the linearisation down different trajectories; one of them lands on a
+  subproblem that is genuinely infeasible. That is a fragility of the
+  successive-linearisation scheme, not of either solver, and it is worth knowing about
+  before building on it.
+- **GLPK does not fail — it simply does not finish.** It never reaches a second pass: it
+  is still working on the *first* MILP when the budget expires, having already spent more
+  time than Gurobi needs for the entire loop. GLPK has no parallel branch-and-cut and
+  none of the modern cut families, and at roughly 43 000 variables with 1440 binaries per
+  pass that gap is decisive. Both encodings are therefore **withdrawn** under the 20×
+  rule rather than reported with a number.
+
+The honest summary is that these MILPs are large enough to separate a commercial
+branch-and-cut implementation from the open-source ones, and the tutorial reports that
+rather than quietly picking whichever solver happened to work.
 
 ## Why the curve has to live inside the OPF
 
@@ -468,22 +532,78 @@ restores differentiability at the cost of no longer representing the curve exact
 This is the check that matters. Each method is exact only if every one of the
 ``3 \times 96 = 288`` optimised operating points lands on the droop.
 
+The curves below are drawn in **absolute p.u. VArs** rather than normalised by ``\bar
+q_i``. Normalising would collapse all three inverters onto one line and hide the thing
+worth seeing: each inverter has its own reactive capability, so each follows its own
+curve, and a dispatch point is only correct if it lies on the curve *of its own
+inverter*. The shaded band is the admissible voltage range ``[0.95, 1.05]``.
+
 ```@example tut
-plts = map(ORDER) do m
+si_color = [:seagreen, :orangered, :dodgerblue]        # in DG_SET order: 7, 18, 33
+dgs      = collect(Int, case.DG_SET)
+Sb       = case.Sbase_kVA                              # kVA per p.u.
+qbar_pu  = collect(Float64, case.qbar_kVAr) ./ Sb      # reactive capability, p.u.
+qmax     = maximum(qbar_pu)
+
+function droop_figure(m)
     r = runs[m]
-    p = plot(Vbp, qshape, lw = 2.5, color = :steelblue, label = "Q-V droop",
-             title = NAMES[m], xlabel = "v at inverter bus (p.u.)",
-             ylabel = m == "bigm" ? "q / q̄" : "", ylims = (-1.35, 1.35),
-             xlims = (0.87, 1.11), legend = :topright)
-    scatter!(p, collect(Float64, r.Vdg_flat), collect(Float64, r.Qdg_norm),
-             m = :+, ms = 4, msw = 1.6, color = :crimson, label = "dispatch")
+    p = plot(size = (880, 620), grid = false, framestyle = :axes,
+             title = "Dispatch vs. the IEEE-1547 droop — $(NAMES[m])", titlefontsize = 13,
+             xlabel = "Voltage (p.u.)", ylabel = "VAR Gen. (p.u.)",
+             xlims = (Vbp[1], Vbp[end]), ylims = (-1.15qmax, 1.15qmax),
+             xticks = 0.90:0.05:1.10,
+             guidefontsize = 12, tickfontsize = 10, legendfontsize = 9,
+             legend = :outertop, legend_columns = 3,
+             foreground_color_legend = :black, background_color_legend = :white,
+             left_margin = 4Plots.mm, right_margin = 8Plots.mm,
+             top_margin = 2Plots.mm, bottom_margin = 4Plots.mm)
+
+    # admissible voltage band and the zero-VAr line
+    vspan!(p, [case.Vmin_limit, case.Vmax_limit], color = :lightblue, alpha = 0.30,
+           lw = 0, label = false)
+    vline!(p, [case.Vmin_limit, case.Vmax_limit], ls = :dash, lw = 1.5,
+           color = :gray65, label = false)
+    hline!(p, [0.0], ls = :dash, lw = 1.5, color = :gray65, label = false)
+
+    for i in eachindex(dgs)
+        qcurve = qshape .* qbar_pu[i]                                   # this SI's droop
+        plot!(p, Vbp, qcurve, lw = 3, color = si_color[i], label = false)
+        scatter!(p, Vbp[2:5], qcurve[2:5], m = :circle, ms = 6,          # breakpoints
+                 mc = si_color[i], msc = si_color[i], label = false)
+        scatter!(p, collect(Float64, r.Vdg_series[i]),                   # 96 dispatch points
+                 collect(Float64, r.Qdg_series[i]) ./ Sb,
+                 m = :+, ms = 7, msw = 2.5, mc = si_color[i], msc = si_color[i],
+                 label = false)
+    end
+
+    # legend proxies, parked outside xlims so they appear only in the key
+    for i in length(dgs):-1:1
+        plot!(p, [1.5, 1.6], [0.0, 0.0], lw = 1.5, color = si_color[i], m = :circle,
+              ms = 5, mc = si_color[i], msc = si_color[i], label = "PV $(dgs[i]) Droop")
+    end
+    for i in length(dgs):-1:1
+        scatter!(p, [1.5], [0.0], m = :+, ms = 7, msw = 2,
+                 mc = si_color[i], msc = si_color[i], label = "PV $(dgs[i]) Q")
+    end
+    vspan!(p, [1.5, 1.6], color = :lightblue, alpha = 0.30, lw = 0,
+           label = "Feasible Operation Region")
     p
 end
-plot(plts..., layout = (1, 3), size = (1000, 350), left_margin = 4Plots.mm,
-     bottom_margin = 4Plots.mm)
+
+droop_figure("bigm")
 ```
 
-Every point sits on the line. Numerically:
+```@example tut
+droop_figure("lambda")
+```
+
+```@example tut
+droop_figure("heaviside")
+```
+
+Every point sits on the curve of its own inverter, and the three reactive capabilities —
+``\bar q = 0.242``, ``0.110`` and ``0.165`` p.u., that is 2420, 1100 and 1650 kVAr — are
+now visible as the three separated flat tails. Numerically:
 
 ```@example tut
 deviation_table()   # hide
@@ -518,8 +638,15 @@ kind are case-specific and should not be read as a general ranking.
 
 !!! warning "Solve times are indicative only"
     These timings come from a single run on one machine with one solver configuration,
-    and the successive-linearisation loop rebuilds the model from scratch each pass. Use
-    them to compare orders of magnitude, not to rank solvers.
+    and the successive-linearisation loop rebuilds the model from scratch each pass. Read
+    them as orders of magnitude, not as a ranking of the *encodings*: the few seconds
+    between Big-M and Lambda here are well inside run-to-run variation, and reversing on
+    another machine would surprise nobody.
+
+    The solver comparison [earlier](@ref "What each MILP solver actually does") is a
+    different matter. A factor of twenty or more is not run-to-run noise, and the
+    conclusion there — that the open-source MILP solvers do not complete this loop —
+    does not turn on the exact numbers.
 
 ### What the curtailment figure is, and what it is not
 

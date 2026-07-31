@@ -1,0 +1,11 @@
+{
+    "method": "lambda",
+    "status": "TIME_LIMIT",
+    "error": "iteration 1 terminated with status TIME_LIMIT",
+    "outcome": "withdrawn",
+    "solver": "GLPK",
+    "converged": false,
+    "budget_seconds": 317.468834,
+    "wall_seconds": 375.6639997959137,
+    "failed_at_iter": 1
+}

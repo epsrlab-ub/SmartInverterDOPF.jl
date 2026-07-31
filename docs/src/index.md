@@ -58,9 +58,20 @@ You will also need a solver. `:bigm` and `:lambda` need an MILP solver; `:heavis
 needs an NLP solver such as [Ipopt](https://github.com/jump-dev/Ipopt.jl).
 
 !!! warning "MILP solver choice"
-    The results throughout this documentation were produced with **Gurobi**. HiGHS does
-    not complete the successive-linearisation loop on this case — see the note in the
-    [Tutorial](@ref "Embedding the Volt-VAr droop into a distribution OPF").
+    The results throughout this documentation were produced with **Gurobi**, which is
+    free for academic use through the
+    [Gurobi academic program](https://www.gurobi.com/academia/academic-program-and-licenses/)
+    (named-user, Web License Service and site licences, all free to students, faculty and
+    staff at accredited degree-granting institutions).
+
+    Neither open-source MILP solver tried completes the successive-linearisation loop on
+    this case: **HiGHS** reports `INFEASIBLE` on the second pass, and **GLPK** is
+    withdrawn after failing to finish even the first pass within 20× Gurobi's total time.
+    Measurements and discussion are in the tutorial's
+    [What each MILP solver actually does](@ref) section.
+
+    The `:heaviside` encoding needs no MILP solver at all — only Ipopt, which is open
+    source — and reaches the same answer.
 
 ## Citing
 

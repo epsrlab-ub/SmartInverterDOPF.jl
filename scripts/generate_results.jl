@@ -1,17 +1,20 @@
 # Regenerate the precomputed results the documentation is built from.
 #
 #   julia --project=scripts scripts/generate_results.jl           # Gurobi + Ipopt
-#   julia --project=scripts scripts/generate_results.jl highs     # HiGHS + Ipopt
+#   julia --project=scripts scripts/generate_results.jl highs     # HiGHS  + Ipopt
+#   julia --project=scripts scripts/generate_results.jl glpk      # GLPK   + Ipopt
 #
 # Writes one JSON per method into docs/src/assets/results/. The documentation reads
 # those files and redraws every figure and table at build time, so building the docs
 # needs no optimisation solver at all — only Plots and JSON3.
 #
-# NOTE: HiGHS does not currently complete the successive-linearisation loop on this
-# case. It solves the first pass and then reports INFEASIBLE on the second, for both
-# :bigm and :lambda, at every MIP gap tried from 1e-3 down to 0. Gurobi solves the same
-# sequence to proven optimality, so the committed results are generated with Gurobi.
-# See the "Solver choice is not free here" note in the tutorial.
+# NOTE: only Gurobi completes the successive-linearisation loop on this case, which is
+# why the committed results are generated with it. HiGHS solves the first pass and then
+# reports INFEASIBLE on the second, for both :bigm and :lambda. GLPK does not finish even
+# the first pass within 20x Gurobi's total time and is withdrawn. The non-Gurobi options
+# above are kept so the failures stay reproducible, not because they produce results.
+# Run scripts/solver_benchmark.jl to reproduce the measurements, and see the tutorial's
+# "What each MILP solver actually does" section for the discussion.
 
 using SmartInverterDOPF
 using JSON3
@@ -26,6 +29,11 @@ if milp == "highs"
     milp_opt, milp_name = HiGHS.Optimizer, "HiGHS"
     milp_attrs = Dict{String,Any}("mip_rel_gap" => 0.001, "output_flag" => false)
     @warn "HiGHS is not expected to complete the linearisation loop on this case; see the header comment."
+elseif milp == "glpk"
+    using GLPK
+    milp_opt, milp_name = GLPK.Optimizer, "GLPK"
+    milp_attrs = Dict{String,Any}("mip_gap" => 0.001, "msg_lev" => 0)
+    @warn "GLPK is not expected to finish even the first pass on this case; see the header comment."
 else
     using Gurobi
     milp_opt, milp_name = Gurobi.Optimizer, "Gurobi"

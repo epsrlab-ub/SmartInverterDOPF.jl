@@ -1,0 +1,11 @@
+{
+    "method": "lambda",
+    "status": "INFEASIBLE",
+    "error": "iteration 2 terminated with status INFEASIBLE",
+    "outcome": "failed",
+    "solver": "HiGHS",
+    "converged": false,
+    "budget_seconds": 317.468834,
+    "wall_seconds": 136.93300008773804,
+    "failed_at_iter": 2
+}
