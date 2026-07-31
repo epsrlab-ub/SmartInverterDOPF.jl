@@ -682,8 +682,7 @@ built on Lambda.
 **Embedding the droop in a distribution OPF**
 
 4. A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow
-   Integrating Volt-VAr Droop of Smart Inverters," *IEEE Green Technologies Conference*,
-   2021. — Big-M
+   Integrating Volt-VAr Droop of Smart Inverters," *IEEE Green Technologies Conference*, 2021. — Big-M
 5. A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow with
    Volt-VAr and Volt-Watt Settings of Smart Inverters," *IEEE IAS Annual Meeting*, 2021.
    — Lambda / SOS2
