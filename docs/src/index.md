@@ -20,7 +20,7 @@ extrema(res.V)              # voltage range across the feeder
 ## The three encodings
 
 The Volt-VAr law is a five-segment piecewise-linear function — a definition by cases,
-which is exactly what a solver cannot read. There are three standard ways to rewrite it
+which is exactly what a solver cannot read. We discuss three ways to rewrite it
 as constraints a solver accepts:
 
 | `method` | class | idea | needs |
