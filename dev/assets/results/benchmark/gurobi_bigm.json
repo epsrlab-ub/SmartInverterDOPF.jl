@@ -1,0 +1,43 @@
+{
+    "solve_seconds": 19.168044000000002,
+    "method": "bigm",
+    "E_curt_kWh": 3022.0487493551864,
+    "budget_seconds": 3600,
+    "Vmin": 0.950065019592991,
+    "Vmax": 1.007052286804075,
+    "solver": "Gurobi",
+    "wall_seconds": 31.35599994659424,
+    "iterations": [
+        {
+            "status": "OPTIMAL",
+            "objective": 1.4752863995823498,
+            "iter": 1,
+            "seconds": 0.7702063,
+            "residual": 0.002853663112649644
+        },
+        {
+            "status": "OPTIMAL",
+            "objective": 1.2470365576879714,
+            "iter": 2,
+            "seconds": 3.9665752,
+            "residual": 0.000837654913296907
+        },
+        {
+            "status": "OPTIMAL",
+            "objective": 1.2092429251780779,
+            "iter": 3,
+            "seconds": 10.7425086,
+            "residual": 1.0919775091048495e-6
+        },
+        {
+            "status": "OPTIMAL",
+            "objective": 1.2088194997420747,
+            "iter": 4,
+            "seconds": 3.6887539,
+            "residual": 5.356592073321273e-8
+        }
+    ],
+    "outcome": "completed",
+    "converged": true,
+    "n_iterations": 4
+}
