@@ -31,23 +31,13 @@ kWh(case, sum(res.PVC))     # PV energy curtailed over the day, kWh
 extrema(res.V)              # voltage range across the feeder, p.u.
 ```
 
-> **Solver note.** Of the three MILP solvers tried, only Gurobi completes the
-> successive-linearisation loop on this case. Each open-source solver was given 20×
-> Gurobi's total time for the same encoding and withdrawn if it could not finish
-> ([`scripts/solver_benchmark.jl`](scripts/solver_benchmark.jl)):
->
-> | solver | `:bigm` | `:lambda` |
-> |:--|:--|:--|
-> | Gurobi | converged, 4 passes, 19.2 s | converged, 6 passes, 15.9 s |
-> | HiGHS | `INFEASIBLE` on pass 2 | `INFEASIBLE` on pass 2 |
-> | GLPK | withdrawn — pass 1 unfinished at 20× | withdrawn — pass 1 unfinished at 20× |
->
-> The model is not infeasible; Gurobi solves the same sequence to proven optimality. The
-> solvers return different optimal solutions to the first subproblem, which sends the
-> linearisation down different trajectories. Committed results are generated with Gurobi,
-> which is [free for academic use](https://www.gurobi.com/academia/academic-program-and-licenses/).
-> The `:heaviside` encoding needs no MILP solver at all — only Ipopt, which is open
-> source — and reaches the same answer.
+> **Solver note.** The committed results are generated with **Gurobi**, which is
+> [free for academic use](https://www.gurobi.com/academia/academic-program-and-licenses/)
+> and fast on this model. We also tried the open-source MILP solvers HiGHS and GLPK;
+> neither worked out — one returned an infeasible status inside the
+> successive-linearisation loop, the other was too slow to finish. If no MILP licence is
+> available, the `:heaviside` encoding needs only Ipopt, which is open source, and
+> reaches the same answer.
 
 ## The three encodings
 
@@ -78,7 +68,6 @@ nonlinear power-flow identity.
 src/          the package: case data, droop encodings, DOPF
 data/         IEEE 33-bus feeder, load profiles, solar profile (JSON)
 scripts/      generate_results.jl — regenerates the precomputed documentation results
-              solver_benchmark.jl — measures each MILP solver under the 20x rule
 docs/         Documenter site; builds without any solver
 test/         test suite
 ```
@@ -90,16 +79,7 @@ The documentation is built from precomputed results committed under
 recompute them:
 
 ```bash
-julia --project=scripts scripts/generate_results.jl          # Gurobi + Ipopt
-julia --project=scripts scripts/generate_results.jl highs    # HiGHS + Ipopt (see solver note)
-julia --project=scripts scripts/generate_results.jl glpk     # GLPK + Ipopt (see solver note)
-```
-
-To reproduce the solver comparison itself — Gurobi, HiGHS and GLPK on both MILP
-encodings, with the 20× withdrawal rule:
-
-```bash
-julia --project=scripts scripts/solver_benchmark.jl
+julia --project=scripts scripts/generate_results.jl
 ```
 
 ## Building the documentation locally

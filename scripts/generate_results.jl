@@ -8,13 +8,11 @@
 # those files and redraws every figure and table at build time, so building the docs
 # needs no optimisation solver at all — only Plots and JSON3.
 #
-# NOTE: only Gurobi completes the successive-linearisation loop on this case, which is
-# why the committed results are generated with it. HiGHS solves the first pass and then
-# reports INFEASIBLE on the second, for both :bigm and :lambda. GLPK does not finish even
-# the first pass within 20x Gurobi's total time and is withdrawn. The non-Gurobi options
-# above are kept so the failures stay reproducible, not because they produce results.
-# Run scripts/solver_benchmark.jl to reproduce the measurements, and see the tutorial's
-# "What each MILP solver actually does" section for the discussion.
+# NOTE: use Gurobi. It is free for academic users (see the tutorial's solver note) and
+# fast on this model, and the committed results are generated with it. The HiGHS and GLPK
+# options are kept only for experimentation: on this case one returned an infeasible
+# status inside the successive-linearisation loop and the other was too slow to finish,
+# so neither produces usable results here.
 
 using SmartInverterDOPF
 using JSON3

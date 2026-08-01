@@ -1,5 +1,5 @@
 {
-    "solve_seconds": 18.8882121,
+    "solve_seconds": 17.3551489,
     "method": "lambda",
     "E_curt_kWh": 3022.048749296638,
     "Qdg_series": [
@@ -1190,42 +1190,42 @@
             "status": "OPTIMAL",
             "objective": 1.4752863995823498,
             "iter": 1,
-            "seconds": 1.0167211,
+            "seconds": 0.9638821,
             "residual": 0.0031506167842693094
         },
         {
             "status": "OPTIMAL",
             "objective": 1.232893652395331,
             "iter": 2,
-            "seconds": 3.7109202,
+            "seconds": 4.4015792,
             "residual": 0.0003509936350372684
         },
         {
             "status": "OPTIMAL",
             "objective": 1.2158905546041123,
             "iter": 3,
-            "seconds": 3.7656841,
+            "seconds": 3.6907938,
             "residual": 1.2861042927849939e-6
         },
         {
             "status": "OPTIMAL",
             "objective": 1.2146780129592003,
             "iter": 4,
-            "seconds": 3.8936092,
+            "seconds": 2.8048331,
             "residual": 0.0011603640216493877
         },
         {
             "status": "OPTIMAL",
             "objective": 1.208828476095324,
             "iter": 5,
-            "seconds": 3.3061236,
+            "seconds": 2.7391992,
             "residual": 1.5851874225862594e-6
         },
         {
             "status": "OPTIMAL",
             "objective": 1.2088194997186552,
             "iter": 6,
-            "seconds": 3.1951539,
+            "seconds": 2.7548615,
             "residual": 5.533688958447858e-12
         }
     ],

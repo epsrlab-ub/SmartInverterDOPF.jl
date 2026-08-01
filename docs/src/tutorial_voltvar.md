@@ -23,8 +23,6 @@ RES  = joinpath("assets", "results")
 case = JSON3.read(read(joinpath(RES, "case.json"), String))
 runs = Dict(m => JSON3.read(read(joinpath(RES, "$m.json"), String))
             for m in ("bigm", "lambda", "heaviside"))
-# what each MILP solver actually did, from scripts/solver_benchmark.jl
-BENCH = JSON3.read(read(joinpath(RES, "benchmark", "index.json"), String))
 
 const NAMES = Dict("bigm" => "Big-M", "lambda" => "Lambda / SOS2", "heaviside" => "Heaviside")
 const ORDER = ["bigm", "lambda", "heaviside"]
@@ -54,24 +52,6 @@ iteration_table(m) = md(
     "|--:|--:|--:|--:|:--|",
     join(["| $(r.iter) | $(fmt(r.seconds, 2)) | $(fmt(r.objective, 6)) | " *
           "$(sci(r.residual)) | `$(r.status)` |" for r in runs[m].iterations], "\n"))
-
-ENC = Dict("bigm" => "Big-M", "lambda" => "Lambda / SOS2")
-bench_row(s, m) = first(r for r in BENCH.runs if r.solver == s && r.method == m)
-
-solver_table() = md(
-    "| solver | encoding | outcome | time (s) | budget (s) | what happened |",
-    "|:--|:--|:--|--:|--:|:--|",
-    join([let r = bench_row(s, m)
-              done   = r.outcome in ("completed", "max_iter")
-              secs   = done ? r.solve_seconds : r.wall_seconds
-              budget = s == BENCH.reference ? "—" : fmt(r.budget_seconds, 0)
-              detail =
-                  r.outcome == "completed" ? "converged in $(r.n_iterations) passes, proven optimal" :
-                  r.outcome == "withdrawn" ? "still on pass $(r.failed_at_iter) when the budget ran out" :
-                  r.outcome == "max_iter"  ? "hit the iteration cap without converging" :
-                  "`$(r.status)` on pass $(r.failed_at_iter)"
-              "| $s | $(ENC[m]) | **$(r.outcome)** | $(fmt(secs, 1)) | $budget | $detail |"
-          end for s in ("Gurobi", "HiGHS", "GLPK"), m in ("bigm", "lambda")][:], "\n"))
 
 deviation_table() = md(
     "| method | max ``\\lvert q^G_i - q_i(v_i)\\rvert`` (p.u.) |",
@@ -109,62 +89,29 @@ Pkg.add(["JuMP", "Gurobi", "Ipopt"])
 Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
 ```
 
-!!! warning "Solver choice is not free here"
-    The results on this page were produced with **Gurobi** (MILP) and **Ipopt** (NLP),
-    and that is not an incidental choice. Of the three MILP solvers tried, only Gurobi
-    completes the successive-linearisation loop on this case — the two open-source ones
-    fail, in two different ways, and the section below reports exactly how.
+!!! note "Solvers used here — and why Gurobi"
+    Everything on this page was produced with **Gurobi** for the two mixed-integer
+    encodings and **Ipopt** for the nonlinear one.
 
-    Gurobi is commercial software, but it is free for academic use. The
+    Gurobi is commercial software, but it is **free for academic use**. The
     [Gurobi academic program](https://www.gurobi.com/academia/academic-program-and-licenses/)
-    offers a **Named-User License** (runs locally, no constant internet connection), a
-    **Web License Service (WLS)** licence usable from any internet-connected machine
-    including containers and cloud runners, and a **Site License** for a department or
-    whole university. All three are free to students, faculty and staff at accredited
-    degree-granting institutions for non-commercial teaching and research; the named-user
-    licence runs up to a year and is renewable while eligibility holds, and recent
-    graduates can keep access through the "Take Gurobi with You" programme.
+    offers a *Named-User License* (runs locally, no constant internet connection), a
+    *Web License Service (WLS)* licence usable from any internet-connected machine
+    including containers and cloud runners, and a *Site License* for a department or
+    whole university. All are free to students, faculty and staff at accredited
+    degree-granting institutions for non-commercial teaching and research, renewable
+    while eligibility holds, and recent graduates can keep access through the
+    "Take Gurobi with You" programme.
 
-    **If no MILP licence is available at all, the `:heaviside` encoding needs only
-    Ipopt**, which is open source — and as the comparison below shows, it reaches the
-    same answer. That is a practical reason to care about an integer-free formulation,
-    quite apart from the theory.
+    We also tried the open-source MILP solvers **HiGHS** and **GLPK** on this model.
+    Neither worked out — one returned an infeasible status inside the
+    successive-linearisation loop, the other was too slow to finish. So the
+    recommendation here is simply to use Gurobi: it is free for academic users and
+    comfortably fast on this problem.
 
-### What each MILP solver actually does
-
-The two MILP encodings were run under Gurobi, [HiGHS](https://highs.dev) and
-[GLPK](https://www.gnu.org/software/glpk/) by
-[`scripts/solver_benchmark.jl`](https://github.com/ra-emami/SmartInverterDOPF.jl/blob/main/scripts/solver_benchmark.jl).
-Gurobi goes first and sets the reference time. Each open-source solver is then given a
-budget of **20× the total time Gurobi needed for the same encoding**, and is *withdrawn*
-if it cannot finish inside it — a solver that needs twenty times the reference to do the
-same work is not a usable substitute here, and leaving it running would not change that.
-
-```@example tut
-solver_table()   # hide
-```
-
-Two quite different failure modes, and neither is a defect in the solver:
-
-- **HiGHS fails fast.** It solves the first pass, then reports `INFEASIBLE` on the
-  second, for both encodings, well inside its budget. The model is not infeasible —
-  Gurobi solves the same sequence to proven optimality, and earlier runs reproduced the
-  HiGHS failure at every MIP gap tried from ``10^{-3}`` down to ``0``. The likely cause
-  is that the two solvers return *different* optimal solutions to the first subproblem,
-  which sends the linearisation down different trajectories; one of them lands on a
-  subproblem that is genuinely infeasible. That is a fragility of the
-  successive-linearisation scheme, not of either solver, and it is worth knowing about
-  before building on it.
-- **GLPK does not fail — it simply does not finish.** It never reaches a second pass: it
-  is still working on the *first* MILP when the budget expires, having already spent more
-  time than Gurobi needs for the entire loop. GLPK has no parallel branch-and-cut and
-  none of the modern cut families, and at roughly 43 000 variables with 1440 binaries per
-  pass that gap is decisive. Both encodings are therefore **withdrawn** under the 20×
-  rule rather than reported with a number.
-
-The honest summary is that these MILPs are large enough to separate a commercial
-branch-and-cut implementation from the open-source ones, and the tutorial reports that
-rather than quietly picking whichever solver happened to work.
+    If no MILP licence is available at all, the `:heaviside` encoding needs **only
+    Ipopt**, which is open source, and reaches the same answer — a practical reason to
+    care about an integer-free formulation quite apart from the theory.
 
 ## Why the curve has to live inside the OPF
 
@@ -246,6 +193,23 @@ There are two ways out, and they define the rest of this tutorial:
   integer-free but becomes non-smooth, so it needs an NLP solver. This is the Heaviside
   route.
 
+Before the details, here is the whole comparison on one screen. Each method answers a
+different question, and that choice determines everything else about it:
+
+| | **Big-M** | **Lambda / SOS2** | **Heaviside** |
+|:--|:--|:--|:--|
+| the question it asks | *which segment is active?* | *which two breakpoints am I between?* | none — the algebra selects |
+| the device | one binary per segment, plus a large constant ``M`` | shared weights ``\lambda_b``, plus SOS2 adjacency | products of unit steps |
+| extra variables, per inverter per time step | 5 binary + 2 continuous | 5 binary + 6 continuous | **none** |
+| model class | MILP | MILP | NLP, non-smooth |
+| anything to tune? | yes — the value of ``M`` | no | no |
+| if breakpoints become variables | reformulation stops being exact | one bilinear term, still tractable | stays exact, still non-smooth |
+| introduced in | [4] | [5], [6] | [7] |
+
+The three columns are three answers to one question — how do you say "it depends" to a
+solver — and each pays for exactness in a different currency: a constant you must choose,
+a combinatorial structure, or differentiability.
+
 ## The host model
 
 The droop is a self-contained module. Whatever distribution OPF you use, it exposes a
@@ -312,35 +276,66 @@ decides what taking it costs everywhere else.
 
 ## Method A — Big-M
 
-Introduce a binary ``\delta_{b}`` for each of the five segments, exactly one of which is
-active:
+*Following Savasci, Inaolaji and Paudyal [4], where this formulation was introduced for
+a second-order-cone DOPF; also Chapter 4 of Inaolaji's dissertation [9].*
+
+**The idea in one sentence.** Give every segment its own on/off switch, and write
+constraints that are *switched off* — made trivially true — whenever their segment is
+not the active one.
+
+That switching-off is what "big-M" means. Take any constraint you want to enforce only
+when a binary ``\delta`` equals 1, and add ``M(1-\delta)`` to its right-hand side. If
+``\delta = 1`` the added term vanishes and the constraint bites. If ``\delta = 0`` the
+right-hand side becomes so large that the constraint cannot possibly be violated — it is
+still *present* in the model, but it no longer restricts anything. One constant, ``M``,
+buys you an if-statement.
+
+**Step 1: exactly one segment is active.** Introduce a binary ``\delta_b`` for each of
+the five segments and require
 
 ```math
 \sum_{b=1}^{5}\delta_{b}=1 .
 ```
 
-Each binary must switch on its own voltage window. For a segment ``b`` spanning
-``[V^{\text{bp}}_{b}, V^{\text{bp}}_{b+1}]``, the pair
+**Step 2: each switch owns a voltage window.** If segment ``b`` is the active one, then
+``v_i`` must lie in that segment's voltage range ``[V^{\text{bp}}_{b},
+V^{\text{bp}}_{b+1}]``. Written in big-M form:
 
 ```math
 v_i \;\ge\; V^{\text{bp}}_{b} - M\,(1-\delta_{b}), \qquad
 v_i \;\le\; V^{\text{bp}}_{b+1} + M\,(1-\delta_{b})
 ```
 
-is vacuous when ``\delta_b = 0`` and binding when ``\delta_b = 1``.
+Vacuous when ``\delta_b = 0``, binding when ``\delta_b = 1``. Together with step 1, the
+solver is forced to pick the segment that genuinely contains ``v_i``.
 
-The sloped segments need one more step. Their law involves the product ``\delta_b v_i``
-of a binary and a continuous variable, which is bilinear. Because ``\delta_b`` is binary
-and ``v_i`` is bounded, that product is linearised **exactly** by an auxiliary variable
-``W_b := \delta_b v_i``:
+**Step 3: the awkward part — the sloped segments.** On segments 2 and 4 the reactive
+output depends on ``v_i``, so the contribution of segment ``b`` to ``q_i^G`` is
+proportional to ``\delta_b v_i``: a binary times a continuous variable. That product is
+**bilinear**, and a bilinear term is exactly what disqualifies a model from being a
+linear program.
+
+The saving grace is that ``\delta_b`` is binary rather than merely continuous, and
+``v_i`` is bounded. Under those two conditions the product can be replaced by a new
+continuous variable ``W_b := \delta_b v_i`` and four linear inequalities, with **no
+approximation whatsoever**:
 
 ```math
 -M(1-\delta_b) \;\le\; v_i - W_b \;\le\; M(1-\delta_b), \qquad
 V^{\text{bp}}_{b}\,\delta_b \;\le\; W_b \;\le\; V^{\text{bp}}_{b+1}\,\delta_b .
 ```
 
-The second pair doubles as the voltage window, so no separate window constraint is
-needed for sloped segments. The droop law is then a single linear equation in which
+Check the two cases and the exactness is immediate. If ``\delta_b = 1``, the left pair
+forces ``W_b = v_i`` and the right pair confines ``v_i`` to the segment. If
+``\delta_b = 0``, the right pair forces ``W_b = 0`` (both bounds collapse to zero) while
+the left pair goes slack. Either way ``W_b`` equals ``\delta_b v_i`` exactly — this is a
+reformulation, not a relaxation.
+
+A small bonus: for the sloped segments the right-hand pair already pins ``v_i`` into the
+segment whenever ``\delta_b = 1``, so the step-2 window constraints are redundant there
+and only segments 1, 3 and 5 need them.
+
+With every product replaced, the droop law becomes a single linear equation in which
 every coefficient is a constant:
 
 ```math
@@ -398,8 +393,19 @@ formulation instead.
 
 ## Method B — Lambda / SOS2
 
-Any point on a line segment is a weighted average of its two endpoints. So give every
-breakpoint a weight ``\lambda_b`` and write *both* coordinates with the same weights:
+*Following Inaolaji, Savasci and Paudyal [5] and its three-phase extension [6], which
+apply the classical lambda method to Volt-VAr and Volt-Watt droops on a LinDistFlow
+host; see also Chapter 5 of [9].*
+
+**The idea in one sentence.** Instead of asking *which segment am I on*, describe the
+operating point directly as a blend of two neighbouring breakpoints.
+
+Big-M starts from the case distinction and works to make it linear. Lambda never forms
+the case distinction at all. It uses a fact about piecewise-linear curves: **every point
+on the curve is a weighted average of two adjacent breakpoints**, and nothing else is.
+
+So attach a weight ``\lambda_b \ge 0`` to each of the six breakpoints, make the weights
+sum to one, and build *both* coordinates from the same weights:
 
 ```math
 v_i = \sum_{b=1}^{6}\lambda_b V^{\text{bp}}_b, \qquad
@@ -407,15 +413,22 @@ q_i^G = \sum_{b=1}^{6}\lambda_b q^{\text{bp}}_b, \qquad
 \sum_{b=1}^{6}\lambda_b = 1, \qquad \lambda_b \ge 0 .
 ```
 
-Because one set of weights builds both coordinates, ``v_i`` and ``q_i^G`` move together
-along the curve. The breakpoint ordinates ``q^{\text{bp}}_b`` are constants, so these are
-linear constraints.
+The single shared ``\lambda`` is the whole trick. Because one set of weights generates
+the voltage *and* the reactive power, the pair ``(v_i, q_i^G)`` cannot drift off the
+curve — move the weights and both coordinates slide together along it. Both
+``V^{\text{bp}}_b`` and ``q^{\text{bp}}_b`` are constants, so these are ordinary linear
+constraints, and no ``M`` needs choosing anywhere.
 
-There is a catch. Nothing above stops the solver from blending *non-adjacent*
-breakpoints — mixing ``\lambda_1`` and ``\lambda_5``, say — which produces points in the
-interior of the convex hull rather than on the curve. The fix is the classical
-**SOS2** condition: at most two weights may be nonzero, and they must be adjacent.
-In mixed-integer form, with one binary ``z_b`` per segment:
+**The catch.** As written, the weights describe the *convex hull* of the six
+breakpoints, not the curve. Nothing yet stops the solver putting weight on ``\lambda_1``
+and ``\lambda_5`` simultaneously, which lands the operating point somewhere in the
+interior of that hull — a ``(v, q)`` pair the inverter would never produce. Since
+interior points give the optimiser more reactive power at a given voltage than the real
+device offers, it will happily take them.
+
+**The fix** is the classical **SOS2** condition: at most two weights may be nonzero, and
+they must be *adjacent*. That is exactly the "blend of two neighbouring breakpoints"
+statement, imposed rather than hoped for. With one binary ``z_b`` per segment:
 
 ```math
 \sum_{b=1}^{5} z_b = 1, \qquad
@@ -424,8 +437,15 @@ In mixed-integer form, with one binary ``z_b`` per segment:
 \lambda_6 \le z_5 .
 ```
 
-Exactly one segment is active, and a weight may be nonzero only if it touches that
-segment — so precisely the two ends of the active segment blend, and nothing else.
+Read it as: ``z_b = 1`` names the active segment; a weight ``\lambda_b`` is allowed to be
+nonzero only if breakpoint ``b`` is an endpoint of that segment. Since exactly one
+``z_b`` is 1, precisely two adjacent weights survive and every other weight is forced to
+zero. The blend is back on the curve.
+
+Worth noticing what is *absent*: no big-M constant, and no product of a binary with a
+continuous variable. The binaries here only switch other variables off — a much
+better-behaved use of integrality, and the reason this formulation tends to give tighter
+relaxations than Big-M on the same curve.
 
 ```julia
 @variable(model, λ[1:6, DG_SET, HOUR_SET, QUARTER_SET] >= 0)
@@ -454,16 +474,31 @@ segment — so precisely the two ends of the active segment blend, and nothing e
     written out longhand because it is portable and because it makes the logic visible —
     which is the point of a tutorial.
 
-The Lambda form has a decisive practical advantage over Big-M: the breakpoint voltages
-``V^{\text{bp}}_b`` appear *linearly*. Make them decision variables and the constraint
-``v_i = \sum_b \lambda_b V^{\text{bp}}_b`` becomes bilinear in ``\lambda`` and
-``V^{\text{bp}}`` — still a single well-understood bilinear term, rather than the tangle
-Big-M produces. This is why adaptive-droop work is normally built on Lambda.
+The Lambda form has a decisive practical advantage over Big-M once you stop treating the
+curve as fixed. The breakpoint voltages ``V^{\text{bp}}_b`` appear *linearly* here. Make
+them decision variables — so the OPF chooses the curve as well as the dispatch — and the
+constraint ``v_i = \sum_b \lambda_b V^{\text{bp}}_b`` becomes bilinear in ``\lambda`` and
+``V^{\text{bp}}``: a single well-understood bilinear term, rather than the tangle Big-M
+produces when ``W_b = \delta_b v_i`` stops being a binary-times-continuous product. This
+is why work on optimised and adaptive droop curves is normally built on Lambda
+[8], [10].
 
 ## Method C — Heaviside
 
-The third route abandons integers entirely. An "if" is just an on/off switch, and the
-unit step is exactly that:
+*Following Inaolaji, Savasci and Paudyal [7], which introduced this encoding precisely
+to remove the integer variables from the two formulations above, on the same
+current–voltage DOPF host used here; see also Chapter 6 of [9].*
+
+**The idea in one sentence.** Keep the case distinction, but write it as arithmetic
+instead of logic — so there is nothing for a solver to branch on.
+
+Both previous methods spend integer variables to answer "which segment?". Integers are
+what make a model combinatorial: the count grows with inverters × time steps, and
+branch-and-bound has to search over them. The motivation in [7] is to get rid of them
+altogether, which also makes the model a candidate for real-time use.
+
+The observation is that an "if" is just an on/off switch, and the unit step *is* an
+on/off switch written as a function:
 
 ```math
 H(x) = \begin{cases} 1, & x \ge 0\\ 0, & x < 0\end{cases}
@@ -488,9 +523,21 @@ q_i^G \;=\; \bar q_i\,\mathcal{W}_1
       \;-\; \bar q_i\,\mathcal{W}_5
 ```
 
-with the sloped terms anchored at their zero crossings, so that segment 2 gives
-``\bar q_i`` at ``V^{\text{bp}}_2`` and ``0`` at ``V^{\text{bp}}_3`` — exactly the sloped law
-of the curve. The dead-band contributes nothing and needs no term at all.
+The dead-band contributes nothing and needs no term at all — segment 3's law is
+``q = 0``, and zero times its window is zero.
+
+!!! tip "Anchor each sloped term at its zero crossing"
+    This is the one place where it is easy to get the algebra wrong, so it is worth
+    stating explicitly. A sloped term is written ``\alpha(v_i - V^{\ast})`` where
+    ``V^{\ast}`` is the voltage at which *that segment's* reactive output passes through
+    zero — ``V^{\text{bp}}_3`` for segment 2, and ``V^{\text{bp}}_4`` for segment 4.
+
+    Anchoring anywhere else breaks the curve. Anchor segment 2 at ``V^{\text{bp}}_2``
+    instead, for example, and the term evaluates to ``0`` at ``V^{\text{bp}}_2`` where the
+    curve should read ``\bar q_i``, leaving a jump at the breakpoint. With the anchors
+    above, segment 2 gives ``\bar q_i`` at ``V^{\text{bp}}_2`` and ``0`` at
+    ``V^{\text{bp}}_3``, matching the flat segments it joins on either side. The
+    verification section below is what confirms this came out right.
 
 ```julia
 Hstep(x) = op_ifelse(op_greater_than_or_equal_to(x, 0), 1.0, 0.0)
@@ -639,14 +686,9 @@ kind are case-specific and should not be read as a general ranking.
 !!! warning "Solve times are indicative only"
     These timings come from a single run on one machine with one solver configuration,
     and the successive-linearisation loop rebuilds the model from scratch each pass. Read
-    them as orders of magnitude, not as a ranking of the *encodings*: the few seconds
+    them as orders of magnitude, not as a ranking of the encodings: the few seconds
     between Big-M and Lambda here are well inside run-to-run variation, and reversing on
     another machine would surprise nobody.
-
-    The solver comparison [earlier](@ref "What each MILP solver actually does") is a
-    different matter. A factor of twenty or more is not run-to-run noise, and the
-    conclusion there — that the open-source MILP solvers do not complete this loop —
-    does not turn on the exact numbers.
 
 ### What the curtailment figure is, and what it is not
 
@@ -680,7 +722,7 @@ with no smart inverters, solved by a backward/forward sweep power flow.
 
 ```@example tut
 buses = 1:case.n_bus
-p = plot(xlabel = "bus", ylabel = "voltage (p.u.)", legend = :bottomleft,
+p = plot(xlabel = "bus", ylabel = "voltage (p.u.)", legend = :topright,
          title = "Daily voltage envelope, with and without smart inverters",
          xticks = [1, 5, 10, 15, 20, 25, 30, 33], xlims = (1, 33))
 plot!(p, buses, collect(Float64, case.V_base_max), lw = 2, ls = :dash,
@@ -715,7 +757,7 @@ Following a single inverter through the day shows the mechanism:
 
 ```@example tut
 r  = runs["lambda"]
-i  = 1                                  # the inverter at bus 7
+i  = 2                                  # the inverter at bus 18, at the end of the feeder
 b  = case.DG_SET[i]
 V  = collect(Float64, r.Vdg_series[i])
 Q  = collect(Float64, r.Qdg_series[i])
@@ -723,13 +765,13 @@ P  = collect(Float64, r.Pdg_series[i])
 A  = collect(Float64, case.avail_kW[i])
 
 p1 = plot(hours, V, lw = 2, color = :dodgerblue4, label = "v at bus $b",
-          ylabel = "voltage (p.u.)", xticks = 0:3:24, xlims = (0, 24), legend = :bottomright)
+          ylabel = "voltage (p.u.)", xticks = 0:3:24, xlims = (0, 24), legend = :topleft)
 hline!(p1, [case.Vmin_limit], ls = :dot, color = :red, label = "lower limit")
 hline!(p1, [Vbp[3], Vbp[4]], ls = :dash, color = :grey55, alpha = 0.8,
        label = "dead-band edges")
 
 p2 = plot(hours, Q, lw = 2, color = :seagreen, label = "reactive output",
-          ylabel = "kVAr", xticks = 0:3:24, xlims = (0, 24), legend = :topright)
+          ylabel = "kVAr", xticks = 0:3:24, xlims = (0, 24), legend = :bottomright)
 hline!(p2, [0], color = :black, lw = 0.6, alpha = 0.5, label = false)
 
 p3 = plot(hours, A, lw = 2, ls = :dash, color = :grey45, label = "available",
@@ -742,9 +784,27 @@ plot(p1, p2, p3, layout = (3, 1), size = (780, 700), link = :x,
      left_margin = 5Plots.mm)
 ```
 
-The inverter injects reactive power whenever its voltage sits below the dead-band, backs
-off to zero inside it, and the active power it delivers tracks the available irradiance
-except where the voltage limit forces a cut.
+Bus 18 sits at the far end of the main feeder, so it swings furthest and exercises the
+whole curve in a single day. Read the top two panels together and the droop law is simply
+visible:
+
+- **Overnight and early morning**, voltage sits near 0.958 p.u., below the dead-band. The
+  inverter is on the upper sloped segment and **injects** about 200 kVAr to hold the
+  voltage up.
+- **Around 08:45**, PV output pushes the voltage up through ``V^{\text{bp}}_3 = 0.97``.
+  The inverter enters the dead-band and reactive output goes to **exactly zero** — the
+  flat stretch in the middle panel, lasting until roughly 09:45.
+- **Mid-morning onward**, voltage crosses ``V^{\text{bp}}_4 = 1.00`` and climbs to about
+  1.006 p.u. by midday. Now on the lower sloped segment, the inverter **absorbs** up to
+  320 kVAr to push back against the PV-driven voltage rise.
+- **Late afternoon**, the sequence reverses, back through the dead-band and into
+  injection for the evening.
+
+Every one of those transitions happens at a breakpoint of the curve, with no set-point
+sent from anywhere: the inverter is reading its own terminal voltage, and the OPF has
+scheduled the feeder knowing exactly what it will do. The bottom panel shows this inverter
+delivering all the active power available to it — the reactive support is enough here, so
+nothing is curtailed at bus 18.
 
 ## Reproducing these results
 
@@ -799,25 +859,52 @@ built on Lambda.
 
 1. IEEE Std 1547-2018, *IEEE Standard for Interconnection and Interoperability of
    Distributed Energy Resources with Associated Electric Power Systems Interfaces*.
+   [doi:10.1109/IEEESTD.2018.8332112](https://doi.org/10.1109/IEEESTD.2018.8332112)
 2. M. E. Baran and F. F. Wu, "Network reconfiguration in distribution systems for loss
-   reduction and load balancing," *IEEE Transactions on Power Delivery*, 1989.
+   reduction and load balancing," *IEEE Transactions on Power Delivery*, vol. 4, no. 2,
+   pp. 1401–1407, 1989. [doi:10.1109/61.25627](https://doi.org/10.1109/61.25627)
    — LinDistFlow
 3. Z. Soltani, M. Khorsand, and S. Ma, "Current–Voltage Unbalanced Distribution AC
    Optimal Power Flow for Advanced Distribution Management System Applications,"
-   *IEEE Open Journal of Industry Applications*, 2024. — the IVACOPF host model used here
+   *IEEE Open Journal of Industry Applications*, vol. 5, 2024.
+   [doi:10.1109/OJIA.2024.3367547](https://doi.org/10.1109/OJIA.2024.3367547)
+   — the IVACOPF host model used here
 
 **Embedding the droop in a distribution OPF**
 
 4. A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow
-   Integrating Volt-VAr Droop of Smart Inverters," *IEEE Green Technologies Conference*, 2021. — Big-M
+   Integrating Volt-Var Droop of Smart Inverters," *2021 IEEE Green Technologies
+   Conference (GreenTech)*, pp. 54–59, 2021.
+   [doi:10.1109/GreenTech48523.2021.00020](https://doi.org/10.1109/GreenTech48523.2021.00020)
+   — **Big-M**, on a second-order-cone DOPF
 5. A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow with
-   Volt-VAr and Volt-Watt Settings of Smart Inverters," *IEEE IAS Annual Meeting*, 2021.
-   — Lambda / SOS2
-6. A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid OPF in Unbalanced
-   Multiphase Networks with Volt-VAr and Volt-Watt Droop Settings of Smart Inverters,"
-   *IEEE Transactions on Industry Applications*, 2022. — Lambda, three-phase
+   Volt-VAr and Volt-Watt Settings of Smart Inverters," *2021 IEEE Industry Applications
+   Society Annual Meeting (IAS)*, 2021.
+   [doi:10.1109/IAS48185.2021.9715792](https://doi.org/10.1109/IAS48185.2021.9715792)
+   — **Lambda / SOS2**, on a LinDistFlow host; also the source of the breakpoints and the
+   16-segment capability polygon used here
+6. A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow in
+   Unbalanced Multiphase Networks with Volt-VAr and Volt-Watt Droop Settings of Smart
+   Inverters," *IEEE Transactions on Industry Applications*, vol. 58, no. 5, 2022.
+   [doi:10.1109/TIA.2022.3181110](https://doi.org/10.1109/TIA.2022.3181110)
+   — Lambda, extended to three-phase unbalanced networks
 7. A. Inaolaji, A. Savasci, and S. Paudyal, "Optimal Droop Settings of Smart Inverters,"
-   *IEEE Photovoltaic Specialists Conference (PVSC)*, 2021. — Heaviside
-8. R. Emami Mirak and A. Inaolaji, "Adaptive and Fair Optimization of Smart Inverter
-   Droop Curves in Distribution Grids," *Electric Power Systems Research*, vol. 262,
-   2027, Art. no. 113613. — Lambda / SOS2 with adaptive breakpoints
+   *2021 IEEE 48th Photovoltaic Specialists Conference (PVSC)*, pp. 2584–2589, 2021.
+   [doi:10.1109/PVSC43889.2021.9518650](https://doi.org/10.1109/PVSC43889.2021.9518650)
+   — **Heaviside**, integer-free, on a current–voltage DOPF solved with Ipopt/JuMP
+8. A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow with
+   Adaptive Volt-VAr Droop of Smart Inverters," *2021 IEEE Industry Applications Society
+   Annual Meeting (IAS)*, 2021.
+   [doi:10.1109/IAS48185.2021.9677119](https://doi.org/10.1109/IAS48185.2021.9677119)
+   — Big-M with an adaptive ``Q(\Delta V)`` droop responding to temporal voltage deviation
+9. A. Inaolaji, *Accurate and Efficient Optimal Power Flow Methods with Control of Smart
+   Inverters*, PhD dissertation, Florida International University, 2023. — book-length
+   treatment covering all three encodings and the host models they sit in
+
+**Optimising the curve itself**
+
+10. R. Emami Mirak and A. Inaolaji, "Adaptive and fair optimization of smart inverter
+    droop curves in distribution grids," *Electric Power Systems Research*, vol. 262,
+    2027, Art. no. 113613.
+    [doi:10.1016/j.epsr.2026.113613](https://doi.org/10.1016/j.epsr.2026.113613)
+    — Lambda / SOS2 with the breakpoints promoted to decision variables
