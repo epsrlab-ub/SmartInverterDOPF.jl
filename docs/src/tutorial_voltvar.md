@@ -195,7 +195,6 @@ different question, and that choice determines everything else about it:
 | extra variables, per inverter per time step | 5 binary + 2 continuous | 5 binary + 6 continuous | **none** |
 | model class | MILP | MILP | NLP, non-smooth |
 | anything to tune? | yes — the value of ``M`` | no | no |
-| if breakpoints become variables | reformulation stops being exact | one bilinear term, still tractable | stays exact, still non-smooth |
 | introduced in | [[5]](#ref-5) | [[6]](#ref-6), [[7]](#ref-7) | [[10]](#ref-10) |
 
 The three columns are three answers to one question — how do you say "it depends" to a
@@ -668,10 +667,7 @@ end
     value used here is `1.1`.
 
 The cost of exactness is bookkeeping: five binaries per inverter per time step, plus two
-auxiliary continuous variables. And if the breakpoints themselves become decision
-variables, ``W_b`` turns into a product of two continuous unknowns and the reformulation
-is no longer exact — the reason breakpoint optimisation is usually done in the Lambda
-formulation instead.
+auxiliary continuous variables.
 
 ## Method B — Lambda / SOS2
 
@@ -783,14 +779,30 @@ relaxations than Big-M on the same curve.
     which is the point of a tutorial.
 
 The Lambda form has a decisive practical advantage over Big-M once you stop treating the
-curve as fixed. The breakpoint voltages ``V^{\text{bp}}_b`` appear *linearly* here. Make
-them decision variables — so the OPF chooses the curve as well as the dispatch — and the
-constraint ``v_i = \sum_b \lambda_b V^{\text{bp}}_b`` becomes bilinear in ``\lambda`` and
-``V^{\text{bp}}``: a single well-understood bilinear term — routinely handled by a
-McCormick envelope, tightened by partitioning the breakpoint range if the relaxation is
-too loose — rather than the tangle Big-M produces when ``W_b = \delta_b v_i`` stops being
-a binary-times-continuous product. This is why work on optimised and adaptive droop
-curves is normally built on Lambda [[8]](#ref-8), [[11]](#ref-11).
+curve as fixed. The breakpoint voltages ``V^{\text{bp}}_b`` appear *linearly* here, and in
+only one place. Make them decision variables — so the OPF chooses the curve as well as
+the dispatch — and exactly one product turns bilinear:
+
+```math
+v_i = \sum_{b=1}^{6}\lambda_b V^{\text{bp}}_b
+```
+
+A single, well-understood bilinear term, routinely handled by a McCormick envelope and
+tightened by partitioning the breakpoint range if the relaxation is too loose. The
+reactive equation ``q_i^G = \sum_b \lambda_b q^{\text{bp}}_b`` is untouched, since the
+ordinates stay constant.
+
+Big-M remains exact under the same change — nothing about it stops representing the
+curve — but the nonlinearity it acquires is both more widespread and of a worse kind. The
+slopes ``\alpha_1 = -\bar q_i/(V^{\text{bp}}_3 - V^{\text{bp}}_2)`` and ``\alpha_2`` become
+*rational functions* of the breakpoints, so in the droop law the terms
+``\alpha_1 W_2 + \delta_2\,\bar q_i V^{\text{bp}}_3/(V^{\text{bp}}_3 - V^{\text{bp}}_2)`` and
+their segment-4 counterparts are nonlinear in ``V^{\text{bp}}`` rather than merely
+bilinear; and the segment bounds
+``V^{\text{bp}}_b \delta_b \le W_b \le V^{\text{bp}}_{b+1}\delta_b`` pick up further
+products of breakpoints with binaries. Lambda confines the whole difficulty to one term;
+Big-M spreads it across the droop law *and* the bounds. That is why work on optimised and
+adaptive droop curves is normally built on Lambda [[8]](#ref-8), [[11]](#ref-11).
 
 ## Method C — Heaviside
 
@@ -1064,12 +1076,10 @@ buys its low curtailment by neglecting losses and by taking the voltage drop as
 The IVACOPF dispatch reproduces the exact AC solution to nine decimal places, sits on the
 droop to ``8\times10^{-8}``, and violates nothing. Its 3022 kWh is the physical answer.
 
-Three further checks support it. The figure is unchanged by removing the redundant
-sending-end power bookkeeping (3031 kWh), by relaxing the ``\ge 0`` bounds on the
-linearised loss variables (3031 kWh), and — most tellingly — by starting the
-linearisation from the LinDistFlow solution rather than a flat profile, which converges to
-the *identical* 3022.0 kWh from a completely different starting point. The answer is a
-property of the model's physics, not of the path taken to it.
+A further check supports it. Starting the linearisation from the LinDistFlow solution
+rather than a flat profile converges to the *identical* 3022.0 kWh from a completely
+different starting point, so the answer is a property of the model's physics rather than
+of the path taken to it.
 
 !!! note "Which host to use"
     Use `:ivacopf` for anything quantitative: it is the accurate model, and it is the one
@@ -1217,9 +1227,10 @@ but hands the difficulty to the NLP solver, where non-smoothness shows up as deg
 convergence — visible here in a first pass that stops at `ALMOST_LOCALLY_SOLVED`.
 
 **Optimising the breakpoints is the open frontier.** Treat ``V^{\text{bp}}`` as decision
-variables and the Lambda formulation acquires a single bilinear term, while Big-M's exact
-product linearisation collapses. That is why adaptive-droop formulations are normally
-built on Lambda.
+variables and every encoding stays exact, but they stop being equally convenient: Lambda
+acquires a single bilinear term, ``\lambda_b V^{\text{bp}}_b``, while Big-M picks up
+rational functions of the breakpoints through its slopes and further products in its
+segment bounds. That is why adaptive-droop formulations are normally built on Lambda.
 
 ## References
 

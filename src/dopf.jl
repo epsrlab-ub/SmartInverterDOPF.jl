@@ -227,7 +227,12 @@ function solve_dopf(c::Case, optimizer;
         @constraint(model, [(i,j) in BRANCH_SET, h in HOUR_SET, m in QUARTER_SET],
             Qloss[(i,j),h,m] == X[(i,j)] * Isq(i,j,h,m))
 
-        # ---- sending-end power bookkeeping ------------------------------------------
+        # ---- sending-end powers and branch losses ------------------------------------
+        # Carrying the sending-end powers and the loss variables alongside the current
+        # formulation is the extension to the base IVACOPF introduced in Emami Mirak &
+        # Inaolaji (EPSR, doi:10.1016/j.epsr.2026.113613). It ties each bus injection to
+        # the flows leaving it and each branch pair to its loss, which pins down the
+        # dispatch more tightly than the current equations alone.
         @constraint(model, [bus in SLACK_SET, h in HOUR_SET, m in QUARTER_SET],
             Pgen[bus,h,m] == sum(Psnd[(i,j),h,m] for (i,j) in Bi_BRANCH_SET if i == bus) + c.Pload[bus,h,m])
         @constraint(model, [bus in DG_SET, h in HOUR_SET, m in QUARTER_SET],
