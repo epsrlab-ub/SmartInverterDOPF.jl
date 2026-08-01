@@ -230,6 +230,116 @@ expanded about the previous iterate and the model is re-solved until the residua
 nonlinear relation, not the linearised one, so the converged point satisfies the real
 power flow.
 
+### The host in equations
+
+Written out in full, so that the droop constraints later have somewhere concrete to
+attach. Bus set ``\mathcal{B}``, branch set ``\mathcal{L}``, inverter buses
+``\mathcal{G} \subset \mathcal{B}``, slack bus ``0``. Every quantity also carries a time
+index ``t \in \{1,\dots,96\}``, suppressed throughout. A superscript ``\circ`` marks a
+value **fixed from the previous iterate** — a constant, not a variable.
+
+Voltage and current at bus ``i`` are split into real and imaginary parts,
+``v_i^{\mathrm{re}}, v_i^{\mathrm{im}}`` and ``I_i^{\mathrm{re}}, I_i^{\mathrm{im}}``;
+``I_{ij}`` is the current in branch ``(i,j)`` and ``v_i`` the voltage *magnitude*.
+
+**Slack reference.**
+
+```math
+v_0^{\mathrm{re}} = V^{\mathrm{nom}}, \qquad v_0^{\mathrm{im}} = 0
+```
+
+**Ohm's law along each branch** — exact and linear, which is the point of current-voltage
+coordinates:
+
+```math
+\begin{aligned}
+v_i^{\mathrm{re}} - v_j^{\mathrm{re}} &= R_{ij} I_{ij}^{\mathrm{re}} - X_{ij} I_{ij}^{\mathrm{im}}\\
+v_i^{\mathrm{im}} - v_j^{\mathrm{im}} &= R_{ij} I_{ij}^{\mathrm{im}} + X_{ij} I_{ij}^{\mathrm{re}}
+\end{aligned}
+\qquad \forall (i,j) \in \mathcal{L}
+```
+
+**Current balance (KCL) at each bus** — also exact and linear:
+
+```math
+I_i^{\mathrm{re}} = \sum_{j:(i,j)\in\mathcal{L}} I_{ij}^{\mathrm{re}}
+                  - \sum_{k:(k,i)\in\mathcal{L}} I_{ki}^{\mathrm{re}},
+\qquad
+I_i^{\mathrm{im}} = \sum_{j:(i,j)\in\mathcal{L}} I_{ij}^{\mathrm{im}}
+                  - \sum_{k:(k,i)\in\mathcal{L}} I_{ki}^{\mathrm{im}}
+```
+
+**Power balance.** The true relation between injected power and current is bilinear:
+
+```math
+p_i = v_i^{\mathrm{re}} I_i^{\mathrm{re}} + v_i^{\mathrm{im}} I_i^{\mathrm{im}},
+\qquad
+q_i = v_i^{\mathrm{im}} I_i^{\mathrm{re}} - v_i^{\mathrm{re}} I_i^{\mathrm{im}}
+```
+
+Each product ``xy`` is replaced by its first-order expansion about the previous iterate,
+``xy \approx x^{\circ}y + y^{\circ}x - x^{\circ}y^{\circ}``, giving the linear forms
+
+```math
+\begin{aligned}
+\mathcal{P}_i &:= v_i^{\mathrm{re}\circ} I_i^{\mathrm{re}} + I_i^{\mathrm{re}\circ} v_i^{\mathrm{re}}
+              + v_i^{\mathrm{im}\circ} I_i^{\mathrm{im}} + I_i^{\mathrm{im}\circ} v_i^{\mathrm{im}}
+              - v_i^{\mathrm{re}\circ} I_i^{\mathrm{re}\circ} - v_i^{\mathrm{im}\circ} I_i^{\mathrm{im}\circ}\\
+\mathcal{Q}_i &:= v_i^{\mathrm{im}\circ} I_i^{\mathrm{re}} + I_i^{\mathrm{re}\circ} v_i^{\mathrm{im}}
+              - v_i^{\mathrm{re}\circ} I_i^{\mathrm{im}} - I_i^{\mathrm{im}\circ} v_i^{\mathrm{re}}
+              - v_i^{\mathrm{im}\circ} I_i^{\mathrm{re}\circ} + v_i^{\mathrm{re}\circ} I_i^{\mathrm{im}\circ}
+\end{aligned}
+```
+
+which are then set equal to the net injection at each class of bus:
+
+```math
+\begin{aligned}
+p_0^{\mathrm{grid}} &= \mathcal{P}_0, & q_0^{\mathrm{grid}} &= \mathcal{Q}_0 & &\text{slack}\\
+-p_i^{L} &= \mathcal{P}_i, & -q_i^{L} &= \mathcal{Q}_i & &\forall i \in \mathcal{B}\setminus(\mathcal{G}\cup\{0\})\\
+p_i^{G} - p_i^{L} &= \mathcal{P}_i, & q_i^{G} - q_i^{L} &= \mathcal{Q}_i & &\forall i \in \mathcal{G}
+\end{aligned}
+```
+
+The last line is where the droop enters the network: ``q_i^{G}`` is exactly the variable
+the three encodings below constrain.
+
+**Branch losses**, from ``|I_{ij}|^2`` linearised the same way:
+
+```math
+P^{\mathrm{loss}}_{ij} = R_{ij}\Big(2 I_{ij}^{\mathrm{re}\circ} I_{ij}^{\mathrm{re}} - (I_{ij}^{\mathrm{re}\circ})^2
+                              + 2 I_{ij}^{\mathrm{im}\circ} I_{ij}^{\mathrm{im}} - (I_{ij}^{\mathrm{im}\circ})^2\Big)
+```
+
+and ``Q^{\mathrm{loss}}_{ij}`` identically with ``X_{ij}`` in place of ``R_{ij}``.
+
+**Voltage magnitude**, linearised about the previous iterate:
+
+```math
+v_i = \frac{v_i^{\mathrm{re}\circ}}{\sqrt{(v_i^{\mathrm{re}\circ})^2 + (v_i^{\mathrm{im}\circ})^2}}\, v_i^{\mathrm{re}}
+    + \frac{v_i^{\mathrm{im}\circ}}{\sqrt{(v_i^{\mathrm{re}\circ})^2 + (v_i^{\mathrm{im}\circ})^2}}\, v_i^{\mathrm{im}}
+```
+
+This ``v_i`` is the single quantity the droop module reads.
+
+**Voltage limits.**
+
+```math
+V^{\min} \le v_i \le V^{\max}, \qquad \forall i \in \mathcal{B}
+```
+
+**Convergence.** After each solve, the residual of the *exact* — not linearised — loss
+identity is measured, and the loop repeats with a refreshed ``\circ`` point until
+
+```math
+\max_{(i,j),\,t}\;\Big|\,(v_i^{\mathrm{re}} - v_j^{\mathrm{re}})I_{ij}^{\mathrm{re}}
+ + (v_i^{\mathrm{im}} - v_j^{\mathrm{im}})I_{ij}^{\mathrm{im}} - P^{\mathrm{loss}}_{ij}\Big| \;<\; \epsilon,
+\qquad \epsilon = 10^{-6}
+```
+
+Checking against the true nonlinear relation is what makes the converged point a genuine
+power-flow solution rather than a solution of the approximation.
+
 ## The setup
 
 The IEEE 33-bus radial feeder, over a full day at 15-minute resolution — 96 time steps.
@@ -263,6 +373,48 @@ reads that voltage and sets reactive power accordingly; and reactive flow moves 
 across the whole feeder. The optimiser wants every kilowatt it can get — the droop
 decides what taking it costs everywhere else.
 
+### The inverter's own constraints
+
+Three more constraint groups sit on ``(p_i^G, q_i^G)`` alongside the droop, and they
+matter because they are what the droop has to coexist with.
+
+**Apparent-power capability.** The inverter cannot exceed its rating,
+``(p_i^{G})^2 + (q_i^{G})^2 \le (s_i^{G})^2``. That circle is convex but nonlinear, so
+following [5] it is replaced by an inscribed ``2k``-sided polygon — exactly ``2k`` linear
+constraints, tightening as ``k`` grows:
+
+```math
+-s_i^{G} \;\le\; \cos(\ell\phi)\, p_i^{G} + \sin(\ell\phi)\, q_i^{G} \;\le\; s_i^{G},
+\qquad \phi = \frac{\pi}{k}, \quad \ell = 1,\dots,k, \quad \forall i \in \mathcal{G}
+```
+
+with ``k = 16`` here, giving a 32-vertex polygon. Because the inverter is oversized
+relative to the array (``s_i^G = 1.1\,\bar p_i``), there is reactive headroom even at full
+irradiance.
+
+**Active and reactive bounds.** Active output is capped by the array rating and, at each
+time step, by the available irradiance ``G(t)``; reactive output by the inverter rating:
+
+```math
+0 \;\le\; p_i^{G} \;\le\; p_i^{G,\max}(t) = \bar p_i\, G(t) \;\le\; \bar p_i,
+\qquad
+q_i^{G} \;\le\; \bar q_i
+```
+
+**Curtailment and the objective.** Curtailment is the shortfall against what was
+available, and the objective is its total over all inverters and all time steps:
+
+```math
+\mathrm{PVC}_i(t) = p_i^{G,\max}(t) - p_i^{G}(t) \;\ge\; 0,
+\qquad
+\min \;\sum_{i \in \mathcal{G}} \sum_{t} \mathrm{PVC}_i(t)
+```
+
+This is objective ``OF_1`` of [5]. Note what is *not* a decision here: ``q_i^G`` never
+appears in the objective. It is pinned entirely by the droop, which is precisely the
+point — the optimiser cannot buy voltage support by choosing reactive power freely, it
+can only choose active power and live with the reactive response the curve produces.
+
 ## Method A — Big-M
 
 *Following Savasci, Inaolaji and Paudyal [4], where this formulation was introduced for
@@ -288,15 +440,28 @@ the five segments and require
 
 **Step 2: each switch owns a voltage window.** If segment ``b`` is the active one, then
 ``v_i`` must lie in that segment's voltage range ``[V^{\text{bp}}_{b},
-V^{\text{bp}}_{b+1}]``. Written in big-M form:
+V^{\text{bp}}_{b+1}]``. In big-M form that is one two-sided inequality per segment, and
+writing all five out gives the complete window system:
 
 ```math
-v_i \;\ge\; V^{\text{bp}}_{b} - M\,(1-\delta_{b}), \qquad
-v_i \;\le\; V^{\text{bp}}_{b+1} + M\,(1-\delta_{b})
+\left.
+\begin{aligned}
+-(1-\delta_{1})M + V_i^{l}\;\; &\le v_i \le\;\; V^{\text{bp}}_{2} + (1-\delta_{1})M\\
+-(1-\delta_{2})M + V^{\text{bp}}_{2} &\le v_i \le\;\; V^{\text{bp}}_{3} + (1-\delta_{2})M\\
+-(1-\delta_{3})M + V^{\text{bp}}_{3} &\le v_i \le\;\; V^{\text{bp}}_{4} + (1-\delta_{3})M\\
+-(1-\delta_{4})M + V^{\text{bp}}_{4} &\le v_i \le\;\; V^{\text{bp}}_{5} + (1-\delta_{4})M\\
+-(1-\delta_{5})M + V^{\text{bp}}_{5} &\le v_i \le\;\; V_i^{u} + (1-\delta_{5})M
+\end{aligned}
+\;\right\}
 ```
 
-Vacuous when ``\delta_b = 0``, binding when ``\delta_b = 1``. Together with step 1, the
-solver is forced to pick the segment that genuinely contains ``v_i``.
+Each row is vacuous when its ``\delta_b = 0`` and binding when ``\delta_b = 1``, so
+together with Step 1 the solver is forced to pick the segment that genuinely contains
+``v_i``. Note the two outer rows: the first segment is bounded below by the variable's own
+lower bound ``V_i^{l}`` and the last above by ``V_i^{u}``, rather than by
+``V^{\text{bp}}_{1}`` and ``V^{\text{bp}}_{6}``. That keeps the model feasible if ``v_i``
+ever sits outside the range the curve was drawn over — the saturated laws simply continue
+to apply.
 
 **Step 3: assemble the droop law — and watch it turn nonlinear.** With the switches in
 place, ``q_i^G`` is just the sum of the five segment laws, each weighted by its own
@@ -344,9 +509,27 @@ forces ``W_b = v_i`` and the right pair confines ``v_i`` to the segment. If
 the left pair goes slack. Either way ``W_b`` equals ``\delta_b v_i`` exactly — this is a
 reformulation, not a relaxation.
 
-A small bonus: for the sloped segments the right-hand pair already pins ``v_i`` into the
-segment whenever ``\delta_b = 1``, so the step-2 window constraints are redundant there
-and only segments 1, 3 and 5 need them.
+Only segments 2 and 4 need this treatment, and for those the ``W_b`` bounds already pin
+``v_i`` into the segment, so their Step-2 window rows are replaced rather than added to.
+The complete constraint system for the Big-M droop is therefore:
+
+```math
+\left.
+\begin{aligned}
+-(1-\delta_{1})M + V_i^{l}\;\; &\le v_i \le\; V^{\text{bp}}_{2} + (1-\delta_{1})M\\[2pt]
+-M(1-\delta_{2}) \;&\le\; v_i - W_{2} \;\le\; (1-\delta_{2})M\\
+V^{\text{bp}}_{2}\,\delta_{2} \;&\le\; W_{2} \;\le\; V^{\text{bp}}_{3}\,\delta_{2}\\[2pt]
+-(1-\delta_{3})M + V^{\text{bp}}_{3} &\le v_i \le\; V^{\text{bp}}_{4} + (1-\delta_{3})M\\[2pt]
+-M(1-\delta_{4}) \;&\le\; v_i - W_{4} \;\le\; (1-\delta_{4})M\\
+V^{\text{bp}}_{4}\,\delta_{4} \;&\le\; W_{4} \;\le\; V^{\text{bp}}_{5}\,\delta_{4}\\[2pt]
+-(1-\delta_{5})M + V^{\text{bp}}_{5} &\le v_i \le\; V_i^{u} + (1-\delta_{5})M
+\end{aligned}
+\;\right\}
+```
+
+Read alongside the Step-2 system, the change is visible: rows 2 and 4 — the sloped
+segments — have each become a ``W`` definition plus a ``W`` range, while the three flat
+segments keep their original windows unchanged.
 
 Now substitute ``\delta_2 v_i \to W_2`` and ``\delta_4 v_i \to W_4`` in the Step 3
 expression. Nothing else changes, and the droop law becomes a single **linear** equation
@@ -443,19 +626,49 @@ device offers, it will happily take them.
 
 **The fix** is the classical **SOS2** condition: at most two weights may be nonzero, and
 they must be *adjacent*. That is exactly the "blend of two neighbouring breakpoints"
-statement, imposed rather than hoped for. With one binary ``z_b`` per segment:
+statement, imposed rather than hoped for. Introduce one binary ``z_b`` per segment —
+five of them for six breakpoints — and write, in full:
 
 ```math
-\sum_{b=1}^{5} z_b = 1, \qquad
-\lambda_1 \le z_1, \qquad
-\lambda_b \le z_{b-1} + z_b \;\; (b = 2,\dots,5), \qquad
-\lambda_6 \le z_5 .
+\left.
+\begin{aligned}
+\lambda_1 &\le z_1\\
+\lambda_2 &\le z_1 + z_2\\
+\lambda_3 &\le z_2 + z_3\\
+\lambda_4 &\le z_3 + z_4\\
+\lambda_5 &\le z_4 + z_5\\
+\lambda_6 &\le z_5\\[2pt]
+\sum_{b=1}^{5} z_b &= 1, \qquad z_b \in \{0,1\}
+\end{aligned}
+\;\right\}
 ```
 
 Read it as: ``z_b = 1`` names the active segment; a weight ``\lambda_b`` is allowed to be
 nonzero only if breakpoint ``b`` is an endpoint of that segment. Since exactly one
 ``z_b`` is 1, precisely two adjacent weights survive and every other weight is forced to
 zero. The blend is back on the curve.
+
+Trace one case to see it work. Suppose ``z_3 = 1`` and every other ``z_b = 0``. Rows 1, 2
+and 6 then force ``\lambda_1 = \lambda_2 = \lambda_6 = 0``; row 5 forces
+``\lambda_5 = 0``; and only ``\lambda_3 \le 1`` and ``\lambda_4 \le 1`` survive. With
+``\sum_b \lambda_b = 1`` the operating point is a blend of breakpoints 3 and 4 alone —
+that is, a point on segment 3, the dead-band.
+
+Collecting everything, the complete Lambda droop model is:
+
+```math
+\left.
+\begin{aligned}
+v_i &= \sum_{b=1}^{6}\lambda_b V^{\text{bp}}_b\\
+q_i^G &= \sum_{b=1}^{6}\lambda_b q^{\text{bp}}_b\\
+\sum_{b=1}^{6}\lambda_b &= 1, \qquad \lambda_b \ge 0\\
+\lambda_1 \le z_1, \quad \lambda_b &\le z_{b-1} + z_b \;\;(b=2,\dots,5), \quad \lambda_6 \le z_5\\
+\sum_{b=1}^{5} z_b &= 1, \qquad z_b \in \{0,1\}
+\end{aligned}
+\;\right\}
+```
+
+Seven constraint rows and no constant to tune — compare that with the Big-M system above.
 
 Worth noticing what is *absent*: no big-M constant, and no product of a binary with a
 continuous variable. The binaries here only switch other variables off — a much
@@ -529,17 +742,29 @@ equals 1 on one segment and 0 everywhere else:
 which is precisely the condition ``V^{\text{bp}}_b \le v_i \le V^{\text{bp}}_{b+1}`` — the
 if-else of segment ``b``, written without logic and without binaries. Multiply each
 segment's law by its own window and add them up. The windows are disjoint, so at any
-voltage all but one vanish and the sum collapses to the single active law:
+voltage all but one vanish and the sum collapses to the single active law.
+
+Written out with every window expanded, and with all five segments present so the
+structure is visible:
 
 ```math
-q_i^G \;=\; \bar q_i\,\mathcal{W}_1
-      \;+\; \alpha_1\!\left(v_i - V^{\text{bp}}_3\right)\mathcal{W}_2
-      \;+\; \alpha_2\!\left(v_i - V^{\text{bp}}_4\right)\mathcal{W}_4
-      \;-\; \bar q_i\,\mathcal{W}_5
+\begin{aligned}
+q_i^G \;=\; &\;\;\;\;\bar q_i \big[\,H(v_i - V^{\text{bp}}_1) - H(v_i - V^{\text{bp}}_2)\,\big] \;+\\
+&\;\alpha_1\!\left(v_i - V^{\text{bp}}_3\right)\big[\,H(v_i - V^{\text{bp}}_2) - H(v_i - V^{\text{bp}}_3)\,\big] \;+\\
+&\;\;\;\;0\,\big[\,H(v_i - V^{\text{bp}}_3) - H(v_i - V^{\text{bp}}_4)\,\big] \;+\\
+&\;\alpha_2\!\left(v_i - V^{\text{bp}}_4\right)\big[\,H(v_i - V^{\text{bp}}_4) - H(v_i - V^{\text{bp}}_5)\,\big] \;-\\
+&\;\;\;\;\bar q_i \big[\,H(v_i - V^{\text{bp}}_5) - H(v_i - V^{\text{bp}}_6)\,\big]
+\end{aligned}
 ```
 
-The dead-band contributes nothing and needs no term at all — segment 3's law is
-``q = 0``, and zero times its window is zero.
+with the same slopes as before,
+``\alpha_1 = -\bar q_i/(V^{\text{bp}}_3-V^{\text{bp}}_2)`` and
+``\alpha_2 = -\bar q_i/(V^{\text{bp}}_5-V^{\text{bp}}_4)``.
+
+That is the entire droop model — one equation, no auxiliary variables, no constraint
+system to accompany it. Line 3 is written out only for symmetry; being identically zero,
+it is dropped in the implementation.
+
 
 !!! tip "Anchor each sloped term at its zero crossing"
     This is the one place where it is easy to get the algebra wrong, so it is worth
