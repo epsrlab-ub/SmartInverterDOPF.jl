@@ -1226,12 +1226,6 @@ eventually breaks the MILP route on large fleets. The integer-free encoding avoi
 but hands the difficulty to the NLP solver, where non-smoothness shows up as degraded
 convergence — visible here in a first pass that stops at `ALMOST_LOCALLY_SOLVED`.
 
-**Optimising the breakpoints is the open frontier.** Treat ``V^{\text{bp}}`` as decision
-variables and every encoding stays exact, but they stop being equally convenient: Lambda
-acquires a single bilinear term, ``\lambda_b V^{\text{bp}}_b``, while Big-M picks up
-rational functions of the breakpoints through its slopes and further products in its
-segment bounds. That is why adaptive-droop formulations are normally built on Lambda.
-
 ## References
 
 **Standard and host models**
