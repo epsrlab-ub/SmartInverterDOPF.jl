@@ -1291,8 +1291,7 @@ Inverters," *IEEE Transactions on Industry Applications*, vol. 58, no. 5, 2022.
 ```
 **[8]** A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow with
 Adaptive Volt-VAr Droop of Smart Inverters," *2021 IEEE Industry Applications Society
-Annual Meeting (IAS)*, 2021.
-[doi:10.1109/IAS48185.2021.9677119](https://doi.org/10.1109/IAS48185.2021.9677119)
+Annual Meeting (IAS)*, 2021. [doi:10.1109/IAS48185.2021.9677119](https://doi.org/10.1109/IAS48185.2021.9677119)
 — Big-M with an adaptive ``Q(\Delta V)`` droop responding to temporal voltage deviation
 
 ```@raw html
@@ -1311,8 +1310,7 @@ treatment covering all three encodings and the host models they sit in
 *2021 IEEE 48th Photovoltaic Specialists Conference (PVSC)*, pp. 2584–2589, 2021.
 [doi:10.1109/PVSC43889.2021.9518650](https://doi.org/10.1109/PVSC43889.2021.9518650)
 — the source of the **Heaviside** encoding used here: integer-free, on a current–voltage
-DOPF solved with Ipopt/JuMP. It is listed in this group because the breakpoint voltages
-are themselves decision variables of the DOPF rather than fixed settings — the curve is
+DOPF solved with Ipopt/JuMP. The breakpoint voltages are themselves decision variables of the DOPF rather than fixed settings — the curve is
 optimised, not merely respected
 
 ```@raw html
