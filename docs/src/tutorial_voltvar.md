@@ -122,7 +122,8 @@ optimised rather than merely respected.
 
 ## The IEEE 1547 Volt-VAr law
 
-The curve is piecewise linear in five segments, defined by six breakpoint voltages
+The characteristic specified in IEEE Std 1547-2018 [[1]](#ref-1) is piecewise linear in
+five segments, defined by six breakpoint voltages
 ``V^{\text{bp}}_1 \le \dots \le V^{\text{bp}}_6`` and the reactive set-point at each. Writing
 ``\bar q_i`` for the reactive capability of inverter ``i``:
 
@@ -155,7 +156,9 @@ annotate!([(Vbp[1] + 0.007, 1.13, text("inject", 8, :left, :steelblue)),
            (Vbp[6] - 0.007, -1.13, text("absorb", 8, :right, :steelblue))])
 ```
 
-The curve used throughout this tutorial is the package default:
+The curve used throughout this tutorial is the package default — breakpoints inside the
+range the standard [[1]](#ref-1) permits the utility to set, and the values used in
+[[6]](#ref-6):
 
 ```@example tut
 breakpoint_table()   # hide
@@ -1200,8 +1203,8 @@ Swap `:lambda` for `:bigm` or `:heaviside`; the latter needs an NLP solver such 
 ## Takeaways
 
 **Embedding is a correctness requirement, not a refinement.** Smart inverters follow
-their curve, not a set-point. Only a droop-aware OPF returns a dispatch the fleet will
-actually deliver.
+their curve, not a set-point — that is what IEEE Std 1547-2018 [[1]](#ref-1) obliges them
+to do. Only a droop-aware OPF returns a dispatch the fleet will actually deliver.
 
 **Two exact families, one curve.** Integer encodings (Big-M, Lambda/SOS2) give an MILP;
 non-smooth algebra (Heaviside) gives an NLP. All three reproduce the curve to
