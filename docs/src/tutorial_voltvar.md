@@ -193,7 +193,7 @@ different question, and that choice determines everything else about it:
 | model class | MILP | MILP | NLP, non-smooth |
 | anything to tune? | yes — the value of ``M`` | no | no |
 | if breakpoints become variables | reformulation stops being exact | one bilinear term, still tractable | stays exact, still non-smooth |
-| introduced in | [5] | [6], [7] | [8] |
+| introduced in | [[5]](#ref-5) | [[6]](#ref-6), [[7]](#ref-7) | [[8]](#ref-8) |
 
 The three columns are three answers to one question — how do you say "it depends" to a
 solver — and each pays for exactness in a different currency: a constant you must choose,
@@ -226,8 +226,8 @@ block is identical in both:
 
 | `host` | model | class | solve |
 |:--|:--|:--|:--|
-| `:ivacopf` (default) | **IVACOPF** — current-voltage AC-OPF [4], [11] | near-exact AC | successive linearisation, iterated |
-| `:lindistflow` | **LinDistFlow** — linearised branch flow [2], [3] | linear approximation | one pass |
+| `:ivacopf` (default) | **IVACOPF** — current-voltage AC-OPF [[4]](#ref-4), [[11]](#ref-11) | near-exact AC | successive linearisation, iterated |
+| `:lindistflow` | **LinDistFlow** — linearised branch flow [[2]](#ref-2), [[3]](#ref-3) | linear approximation | one pass |
 
 ```julia
 solve_dopf(case, Gurobi.Optimizer; method = :lambda)                       # IVACOPF
@@ -240,8 +240,8 @@ droop, not the network model.
 
 ### IVACOPF — the host used here
 
-The **current-voltage AC optimal power flow** (IVACOPF) of Soltani, Khorsand and Ma [4],
-with the successive-linearisation scheme used here developed further in [11]. The
+The **current-voltage AC optimal power flow** (IVACOPF) of Soltani, Khorsand and Ma [[4]](#ref-4),
+with the successive-linearisation scheme used here developed further in [[11]](#ref-11). The
 network is written in rectangular current and voltage coordinates. Ohm's law and KCL are
 then exactly linear. Two things remain bilinear — the ``v \cdot I`` power balance and the
 ``|I|^2`` branch loss — and these are handled by successive linearisation: each is
@@ -362,7 +362,7 @@ power-flow solution rather than a solution of the approximation.
 
 ### LinDistFlow — the linear alternative
 
-**LinDistFlow** [3], the linearised form of the branch-flow model [2], is what most of
+**LinDistFlow** [[3]](#ref-3), the linearised form of the branch-flow model [[2]](#ref-2), is what most of
 the droop-integrated DOPF literature uses. It is the branch-flow model with the loss
 terms dropped: for a radial feeder with small voltage deviations, keep the power balance
 and the voltage drop, discard ``|I|^2``, and everything becomes linear.
@@ -394,11 +394,36 @@ different package.
 | effort | much faster, far lower computational cost | an MILP per pass, so several times the work |
 
 The trade is accuracy against effort. LinDistFlow with Big-M or Lambda is a single MILP
-with no outer loop — which is why it is the usual choice in this literature [6], [7], and
-on the case study below it solves in well under a second against roughly half a minute
-for IVACOPF. What you give up is that losses and voltages carry the linearisation error.
-IVACOPF pays for near-exact power flow with an iteration whose convergence has to be
-checked, and gets you loss figures you can quote.
+with no outer loop — which is why it is the usual choice in this literature
+[[6]](#ref-6), [[7]](#ref-7), and on the case study below it solves in well under a
+second against roughly half a minute for IVACOPF. What you give up is accuracy, and on
+this feeder you give up more than you might expect: the section
+[Where the curtailment comes from](@ref) audits both dispatches against an exact AC power
+flow, and LinDistFlow's turns out not to be deliverable. **Use IVACOPF for anything
+quantitative**, which is also the choice made on accuracy grounds in [[11]](#ref-11).
+
+### Using LinDistFlow to start IVACOPF
+
+The two are not only alternatives — the cheap one makes the accurate one cheaper. By
+default IVACOPF begins from a flat profile (``v = 1\angle 0``, all currents zero), which
+is far from any solution. Passing `warm_start = :lindistflow` instead solves the linear
+host first and expands its dispatch into a consistent complex state with an exact
+power-flow sweep, so the first linearisation is taken about a point that is already close:
+
+```julia
+solve_dopf(case, Gurobi.Optimizer; method = :lambda, warm_start = :lindistflow)
+```
+
+| start | passes | total solve | curtailed |
+|:--|--:|--:|--:|
+| flat (`:bigm` / `:lambda`) | 4 / 6 | 19.2 s / 16.1 s | 3022.0 kWh |
+| `warm_start = :lindistflow` | 3 / 3 | 11.2 s / 9.2 s | 3022.0 kWh |
+
+Half the passes for Lambda and roughly a 1.7× speed-up, warm-start solve included. The
+curtailment is identical to the digit — which is the more interesting half of the result.
+Two very different starting points converging on the same answer is evidence that the
+answer belongs to the model rather than to the trajectory, and it is one of the checks
+cited below.
 
 ## The setup
 
@@ -440,7 +465,7 @@ matter because they are what the droop has to coexist with.
 
 **Apparent-power capability.** The inverter cannot exceed its rating,
 ``(p_i^{G})^2 + (q_i^{G})^2 \le (s_i^{G})^2``. That circle is convex but nonlinear, so
-following [6] it is replaced by an inscribed ``2k``-sided polygon — exactly ``2k`` linear
+following [[6]](#ref-6) it is replaced by an inscribed ``2k``-sided polygon — exactly ``2k`` linear
 constraints, tightening as ``k`` grows:
 
 ```math
@@ -470,15 +495,15 @@ available, and the objective is its total over all inverters and all time steps:
 \min \;\sum_{i \in \mathcal{G}} \sum_{t} \mathrm{PVC}_i(t)
 ```
 
-This is objective ``OF_1`` of [6]. Note what is *not* a decision here: ``q_i^G`` never
+This is objective ``OF_1`` of [[6]](#ref-6). Note what is *not* a decision here: ``q_i^G`` never
 appears in the objective. It is pinned entirely by the droop, which is precisely the
 point — the optimiser cannot buy voltage support by choosing reactive power freely, it
 can only choose active power and live with the reactive response the curve produces.
 
 ## Method A — Big-M
 
-*Following Savasci, Inaolaji and Paudyal [5], where this formulation was introduced for
-a second-order-cone DOPF; also Chapter 4 of Inaolaji's dissertation [10].*
+*Following Savasci, Inaolaji and Paudyal [[5]](#ref-5), where this formulation was introduced for
+a second-order-cone DOPF; also Chapter 4 of Inaolaji's dissertation [[10]](#ref-10).*
 
 **The idea in one sentence.** Give every segment its own on/off switch, and write
 constraints that are *switched off* — made trivially true — whenever their segment is
@@ -647,9 +672,9 @@ formulation instead.
 
 ## Method B — Lambda / SOS2
 
-*Following Inaolaji, Savasci and Paudyal [6] and its three-phase extension [7], which
+*Following Inaolaji, Savasci and Paudyal [[6]](#ref-6) and its three-phase extension [[7]](#ref-7), which
 apply the classical lambda method to Volt-VAr and Volt-Watt droops on a LinDistFlow
-host; see also Chapter 5 of [10].*
+host; see also Chapter 5 of [[10]](#ref-10).*
 
 **The idea in one sentence.** Instead of asking *which segment am I on*, describe the
 operating point directly as a blend of two neighbouring breakpoints.
@@ -762,20 +787,20 @@ constraint ``v_i = \sum_b \lambda_b V^{\text{bp}}_b`` becomes bilinear in ``\lam
 McCormick envelope, tightened by partitioning the breakpoint range if the relaxation is
 too loose — rather than the tangle Big-M produces when ``W_b = \delta_b v_i`` stops being
 a binary-times-continuous product. This is why work on optimised and adaptive droop
-curves is normally built on Lambda [9], [11].
+curves is normally built on Lambda [[9]](#ref-9), [[11]](#ref-11).
 
 ## Method C — Heaviside
 
-*Following Inaolaji, Savasci and Paudyal [8], which introduced this encoding precisely
+*Following Inaolaji, Savasci and Paudyal [[8]](#ref-8), which introduced this encoding precisely
 to remove the integer variables from the two formulations above, on the same
-current–voltage DOPF host used here; see also Chapter 6 of [10].*
+current–voltage DOPF host used here; see also Chapter 6 of [[10]](#ref-10).*
 
 **The idea in one sentence.** Keep the case distinction, but write it as arithmetic
 instead of logic — so there is nothing for a solver to branch on.
 
 Both previous methods spend integer variables to answer "which segment?". Integers are
 what make a model combinatorial: the count grows with inverters × time steps, and
-branch-and-bound has to search over them. The motivation in [8] is to get rid of them
+branch-and-bound has to search over them. The motivation in [[8]](#ref-8) is to get rid of them
 altogether, which also makes the model a candidate for real-time use.
 
 The observation is that an "if" is just an on/off switch, and the unit step *is* an
@@ -983,12 +1008,11 @@ kind are case-specific and should not be read as a general ranking.
     between Big-M and Lambda here are well inside run-to-run variation, and reversing on
     another machine would surprise nobody.
 
-### What the curtailment figure is, and what it is not
+### Where the curtailment comes from
 
-The curtailed-energy column is reported here as the output of this host model on this
-case — it is the quantity the three encodings are being compared *on*, and they agree on
-it. It should not be read as a physical curtailment requirement of the feeder, because
-the usual suspects turn out not to be binding:
+The curtailed-energy column is the quantity the three encodings are being compared *on*,
+and they agree on it. It is worth asking what sets its level, because the usual suspects
+turn out not to be binding:
 
 | probe | outcome |
 |:--|:--|
@@ -1000,39 +1024,60 @@ the usual suspects turn out not to be binding:
 
 At the worst-curtailed quarter-hour the bus-7 inverter holds about 915 kW of 2200 kW
 available, with zero reactive output and no constraint active at its own bus or anywhere
-else on the feeder. Whatever sets that level, it is a property of the host formulation
-rather than of the droop encoding — which is precisely why it does not disturb the
-comparison above: all three encodings sit inside the same host and inherit it equally.
+else on the feeder. Whatever sets that level, it is a property of the *host*, not of the
+droop encoding — which is why it does not disturb the comparison above: all three
+encodings sit inside the same host and inherit it equally.
 
-!!! danger "The second host settles this: the figure is a host artifact"
-    Now that the same case can be run on LinDistFlow, the question has an answer, and it
-    is not a flattering one for the IVACOPF host. Same feeder, same droop, same
-    inverters, same objective — only the network model differs:
+It would be easy to stop there and call the figure an artifact. The second host makes it
+possible to check instead.
 
-    | host | curtailed | at the worst-curtailed step |
-    |:--|--:|:--|
-    | IVACOPF | **3022 kWh** | ``q^G = 0``, ``\lvert S\rvert/S_{\max} = 0.38``, **no bus at a voltage limit at any point in the day** |
-    | LinDistFlow | **60.5 kWh** | ``\lvert S\rvert/S_{\max} = 1.001`` — the inverter is exactly at its rating |
+### The two hosts disagree — and the exact power flow says which to believe
 
-    LinDistFlow curtails for a reason you can point at: the droop is absorbing reactive
-    power and the apparent-power circle has run out of room for active power. IVACOPF
-    curtails 50× as much with nothing binding anywhere, which is not a physical result.
+Running the same case on both hosts turns this from a puzzle into a measurement. Same
+feeder, same droop, same inverters, same objective; only the network model differs:
 
-    Two plausible culprits were tested and cleared. Removing the redundant sending-end
-    power bookkeeping leaves curtailment at 3031 kWh (and runs 3.6× faster, so that block
-    is genuinely redundant). Relaxing the ``\ge 0`` bounds on the linearised loss
-    variables also leaves it at 3031 kWh. The cause is more likely intrinsic to the
-    successive-linearisation scheme: the converged point is a fixed point of "re-solve
-    the model linearised about the previous iterate", and such a point need not be
-    optimal for the underlying nonlinear problem.
+| host | curtailed | at its own worst-curtailed step |
+|:--|--:|:--|
+| IVACOPF | 3022 kWh | ``q^G = 0``, ``\lvert S\rvert/S_{\max} = 0.38``, no bus at a voltage limit |
+| LinDistFlow | 60.5 kWh | ``\lvert S\rvert/S_{\max} = 1.001`` — the inverter is at its rating |
 
-    **What this does and does not affect.** It does not affect the subject of this page:
-    all three encodings sit in the same host, inherit the same artifact equally, and
-    still agree with each other to four significant figures — that comparison is
-    untouched. It does mean the absolute curtailment figures on this page should be read
-    as *this host's output*, not as the feeder's physical curtailment requirement, and
-    that anyone using this model to quantify curtailment should prefer `:lindistflow`
-    until the IVACOPF behaviour is understood.
+A factor of fifty. The tempting reading is that IVACOPF curtails for no reason. The test
+that settles it is to stop asking either model about itself: take each dispatch, solve the
+**exact** AC power flow for those injections with a backward/forward sweep, and check the
+result against the physics both models claim to represent.
+
+| dispatch | its own ``v`` vs the true AC ``v`` | droop residual at the **true** voltage | steps outside ``[0.95, 1.05]`` |
+|:--|--:|--:|--:|
+| LinDistFlow | off by ``7.8\times10^{-3}`` p.u. | ``6.1\times10^{-2}`` p.u. | **17** |
+| IVACOPF | ``9.6\times10^{-9}`` | ``7.9\times10^{-8}`` | 0 |
+
+That is decisive, and it runs the other way from the tempting reading. **LinDistFlow's
+60.5 kWh is not achievable.** Put its own dispatch on the real network and the inverters
+sit off their droop curves by 6 % of rating — they would not produce that reactive power
+at those voltages — and seventeen quarter-hours fall below the lower voltage limit. It
+buys its low curtailment by neglecting losses and by taking the voltage drop as
+``-(RP + XQ)/V^{\mathrm{nom}}``, and the dispatch it returns cannot be delivered.
+
+The IVACOPF dispatch reproduces the exact AC solution to nine decimal places, sits on the
+droop to ``8\times10^{-8}``, and violates nothing. Its 3022 kWh is the physical answer.
+
+Three further checks support it. The figure is unchanged by removing the redundant
+sending-end power bookkeeping (3031 kWh), by relaxing the ``\ge 0`` bounds on the
+linearised loss variables (3031 kWh), and — most tellingly — by starting the
+linearisation from the LinDistFlow solution rather than a flat profile, which converges to
+the *identical* 3022.0 kWh from a completely different starting point. The answer is a
+property of the model's physics, not of the path taken to it.
+
+!!! note "Which host to use"
+    Use `:ivacopf` for anything quantitative: it is the accurate model, and it is the one
+    selected on accuracy grounds in [[11]](#ref-11). `:lindistflow` earns its place as a
+    fast convex first look and as a starting point for IVACOPF (below), but its dispatch
+    should not be reported as a result.
+
+What remains genuinely open is why the binding mechanism is so indirect — at the
+worst-curtailed step nothing sits at a limit, yet the exact power flow confirms that more
+injection is not deliverable under the droop. Worth understanding before building
+curtailment studies on any host.
 
 ## What the droop actually buys
 
@@ -1177,60 +1222,92 @@ built on Lambda.
 
 **Standard and host models**
 
-1. IEEE Std 1547-2018, *IEEE Standard for Interconnection and Interoperability of
-   Distributed Energy Resources with Associated Electric Power Systems Interfaces*.
-   [doi:10.1109/IEEESTD.2018.8332112](https://doi.org/10.1109/IEEESTD.2018.8332112)
-2. M. E. Baran and F. F. Wu, "Network reconfiguration in distribution systems for loss
-   reduction and load balancing," *IEEE Transactions on Power Delivery*, vol. 4, no. 2,
-   pp. 1401–1407, 1989. [doi:10.1109/61.25627](https://doi.org/10.1109/61.25627)
-   — the branch-flow (DistFlow) model that LinDistFlow linearises
-3. K. Turitsyn, P. Šulc, S. Backhaus, and M. Chertkov, "Local control of reactive power
-   by distributed photovoltaic generators," *2010 First IEEE International Conference on
-   Smart Grid Communications (SmartGridComm)*, pp. 79–84, 2010.
-   [doi:10.1109/SMARTGRID.2010.5622021](https://doi.org/10.1109/SMARTGRID.2010.5622021)
-   · [arXiv:1006.0160](https://arxiv.org/pdf/1006.0160)
-   — **LinDistFlow**, available here as `host = :lindistflow`
-4. Z. Soltani, M. Khorsand, and S. Ma, "Current–Voltage Unbalanced Distribution AC
-   Optimal Power Flow for Advanced Distribution Management System Applications,"
-   *IEEE Open Journal of Industry Applications*, vol. 5, 2024.
-   [doi:10.1109/OJIA.2024.3367547](https://doi.org/10.1109/OJIA.2024.3367547)
-   — **IVACOPF**, the origin of the current-voltage host; the successive-linearisation
-   scheme built on it here is developed further in [11]
+```@raw html
+<a id="ref-1"></a>
+```
+**[1]** IEEE Std 1547-2018, *IEEE Standard for Interconnection and Interoperability of
+Distributed Energy Resources with Associated Electric Power Systems Interfaces*.
+[doi:10.1109/IEEESTD.2018.8332112](https://doi.org/10.1109/IEEESTD.2018.8332112)
+```@raw html
+<a id="ref-2"></a>
+```
+**[2]** M. E. Baran and F. F. Wu, "Network reconfiguration in distribution systems for loss
+reduction and load balancing," *IEEE Transactions on Power Delivery*, vol. 4, no. 2,
+pp. 1401–1407, 1989. [doi:10.1109/61.25627](https://doi.org/10.1109/61.25627)
+— the branch-flow (DistFlow) model that LinDistFlow linearises
+```@raw html
+<a id="ref-3"></a>
+```
+**[3]** K. Turitsyn, P. Šulc, S. Backhaus, and M. Chertkov, "Local control of reactive power
+by distributed photovoltaic generators," *2010 First IEEE International Conference on
+Smart Grid Communications (SmartGridComm)*, pp. 79–84, 2010.
+[doi:10.1109/SMARTGRID.2010.5622021](https://doi.org/10.1109/SMARTGRID.2010.5622021)
+— **LinDistFlow**, available here as `host = :lindistflow`
+```@raw html
+<a id="ref-4"></a>
+```
+**[4]** Z. Soltani, M. Khorsand, and S. Ma, "Current–Voltage Unbalanced Distribution AC
+Optimal Power Flow for Advanced Distribution Management System Applications,"
+*IEEE Open Journal of Industry Applications*, vol. 5, 2024.
+[doi:10.1109/OJIA.2024.3367547](https://doi.org/10.1109/OJIA.2024.3367547)
+— **IVACOPF**, the origin of the current-voltage host; the successive-linearisation
+scheme built on it here is developed further in [[11]](#ref-11)
 
 **Embedding the droop in a distribution OPF**
 
-5. A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow
-   Integrating Volt-Var Droop of Smart Inverters," *2021 IEEE Green Technologies
-   Conference (GreenTech)*, pp. 54–59, 2021.
-   [doi:10.1109/GreenTech48523.2021.00020](https://doi.org/10.1109/GreenTech48523.2021.00020)
-   — **Big-M**, on a second-order-cone DOPF
-6. A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow with
-   Volt-VAr and Volt-Watt Settings of Smart Inverters," *2021 IEEE Industry Applications
-   Society Annual Meeting (IAS)*, 2021.
-   [doi:10.1109/IAS48185.2021.9715792](https://doi.org/10.1109/IAS48185.2021.9715792)
-   — **Lambda / SOS2**, on a LinDistFlow host; also the source of the breakpoints and the
-   16-segment capability polygon used here
-7. A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow in
-   Unbalanced Multiphase Networks with Volt-VAr and Volt-Watt Droop Settings of Smart
-   Inverters," *IEEE Transactions on Industry Applications*, vol. 58, no. 5, 2022.
-   [doi:10.1109/TIA.2022.3181110](https://doi.org/10.1109/TIA.2022.3181110)
-   — Lambda, extended to three-phase unbalanced networks
-8. A. Inaolaji, A. Savasci, and S. Paudyal, "Optimal Droop Settings of Smart Inverters,"
-   *2021 IEEE 48th Photovoltaic Specialists Conference (PVSC)*, pp. 2584–2589, 2021.
-   [doi:10.1109/PVSC43889.2021.9518650](https://doi.org/10.1109/PVSC43889.2021.9518650)
-   — **Heaviside**, integer-free, on a current–voltage DOPF solved with Ipopt/JuMP
-9. A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow with
-   Adaptive Volt-VAr Droop of Smart Inverters," *2021 IEEE Industry Applications Society
-   Annual Meeting (IAS)*, 2021.
-   [doi:10.1109/IAS48185.2021.9677119](https://doi.org/10.1109/IAS48185.2021.9677119)
-   — Big-M with an adaptive ``Q(\Delta V)`` droop responding to temporal voltage deviation
-10. A. Inaolaji, *Accurate and Efficient Optimal Power Flow Methods with Control of Smart
-   Inverters*, PhD dissertation, Florida International University, 2023. — book-length
-   treatment covering all three encodings and the host models they sit in
+```@raw html
+<a id="ref-5"></a>
+```
+**[5]** A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow
+Integrating Volt-Var Droop of Smart Inverters," *2021 IEEE Green Technologies
+Conference (GreenTech)*, pp. 54–59, 2021.
+[doi:10.1109/GreenTech48523.2021.00020](https://doi.org/10.1109/GreenTech48523.2021.00020)
+— **Big-M**, on a second-order-cone DOPF
+```@raw html
+<a id="ref-6"></a>
+```
+**[6]** A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow with
+Volt-VAr and Volt-Watt Settings of Smart Inverters," *2021 IEEE Industry Applications
+Society Annual Meeting (IAS)*, 2021.
+[doi:10.1109/IAS48185.2021.9715792](https://doi.org/10.1109/IAS48185.2021.9715792)
+— **Lambda / SOS2**, on a LinDistFlow host; also the source of the breakpoints and the
+16-segment capability polygon used here
+```@raw html
+<a id="ref-7"></a>
+```
+**[7]** A. Inaolaji, A. Savasci, and S. Paudyal, "Distribution Grid Optimal Power Flow in
+Unbalanced Multiphase Networks with Volt-VAr and Volt-Watt Droop Settings of Smart
+Inverters," *IEEE Transactions on Industry Applications*, vol. 58, no. 5, 2022.
+[doi:10.1109/TIA.2022.3181110](https://doi.org/10.1109/TIA.2022.3181110)
+— Lambda, extended to three-phase unbalanced networks
+```@raw html
+<a id="ref-8"></a>
+```
+**[8]** A. Inaolaji, A. Savasci, and S. Paudyal, "Optimal Droop Settings of Smart Inverters,"
+*2021 IEEE 48th Photovoltaic Specialists Conference (PVSC)*, pp. 2584–2589, 2021.
+[doi:10.1109/PVSC43889.2021.9518650](https://doi.org/10.1109/PVSC43889.2021.9518650)
+— **Heaviside**, integer-free, on a current–voltage DOPF solved with Ipopt/JuMP. This paper also **optimises the droop curve itself**: the breakpoint voltages are decision variables of the DOPF, not fixed settings, so it belongs to the group below as much as to this one
+```@raw html
+<a id="ref-9"></a>
+```
+**[9]** A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow with
+Adaptive Volt-VAr Droop of Smart Inverters," *2021 IEEE Industry Applications Society
+Annual Meeting (IAS)*, 2021.
+[doi:10.1109/IAS48185.2021.9677119](https://doi.org/10.1109/IAS48185.2021.9677119)
+— Big-M with an adaptive ``Q(\Delta V)`` droop responding to temporal voltage deviation
+```@raw html
+<a id="ref-10"></a>
+```
+**[10]** A. Inaolaji, *Accurate and Efficient Optimal Power Flow Methods with Control of Smart
+Inverters*, PhD dissertation, Florida International University, 2023. — book-length
+treatment covering all three encodings and the host models they sit in
 
 **Optimising the curve itself**
 
-11. R. Emami Mirak and A. Inaolaji, "Adaptive and fair optimization of smart inverter
+```@raw html
+<a id="ref-11"></a>
+```
+**[11]** R. Emami Mirak and A. Inaolaji, "Adaptive and fair optimization of smart inverter
     droop curves in distribution grids," *Electric Power Systems Research*, vol. 262,
     2027, Art. no. 113613.
     [doi:10.1016/j.epsr.2026.113613](https://doi.org/10.1016/j.epsr.2026.113613)

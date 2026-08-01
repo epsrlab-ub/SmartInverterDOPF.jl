@@ -45,6 +45,20 @@ inside. They are independent — the droop constraints are identical in both hos
 solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow)
 ```
 
+> **Use `:ivacopf` for quantitative work.** Audited against an exact AC power flow on the
+> bundled case, the IVACOPF dispatch reproduces the true solution to ~1e-9 p.u. and sits
+> on the droop curve to ~1e-7. The LinDistFlow dispatch is off the droop by 6% of
+> inverter rating and puts 17 of the 96 time steps below the lower voltage limit — it is
+> not deliverable. `:lindistflow` is for a fast first look and for warm-starting.
+
+The cheap host also makes the accurate one cheaper — `warm_start = :lindistflow` seeds
+the IVACOPF linearisation from the LinDistFlow solution instead of a flat profile, which
+halves the passes and is ~1.7× faster overall, for the same answer:
+
+```julia
+solve_dopf(case, Gurobi.Optimizer; method = :lambda, warm_start = :lindistflow)
+```
+
 > **Solver note.** The committed results are generated with **Gurobi**, which is
 > [free for academic users](https://www.gurobi.com/academia/academic-program-and-licenses/).
 > We also tried the open-source MILP solvers HiGHS and GLPK; neither worked out — one

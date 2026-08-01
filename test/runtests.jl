@@ -2,6 +2,7 @@ using SmartInverterDOPF
 using JuMP
 using Test
 using HiGHS   # model construction only — see the LinDistFlow testset
+using Statistics: mean
 using Ipopt
 
 const CASE = load_case()
@@ -111,6 +112,32 @@ const CASE = load_case()
         # any model is built (so it needs no solver)
         @test_throws ArgumentError solve_dopf(CASE, nothing; host = :nonsense)
         @test_throws ArgumentError solve_dopf(CASE, nothing; host = :lindistflow_typo)
+        @test_throws ArgumentError solve_dopf(CASE, nothing; warm_start = :flat)
+    end
+
+    @testset "warm-start sweep" begin
+        # The sweep turns a dispatch into a complex state that satisfies the AC power
+        # flow exactly, which is what makes it a good linearisation point. With no
+        # inverter output at all it must reproduce the no-inverter base case.
+        zero_dg = zeros(ndg(CASE), 24, 4)
+        v_r, v_im, Ibs_r, Ibs_im, Ibr_r, Ibr_im =
+            SmartInverterDOPF._sweep_state(CASE, zero_dg, zero_dg)
+        V = sqrt.(v_r .^ 2 .+ v_im .^ 2)
+        @test maximum(abs.(V .- base_case_voltages(CASE))) < 1e-9
+        @test all(V[1, :, :] .≈ 1.0)                       # slack held at nominal
+
+        # Ohm's law must hold exactly on every branch of the swept state
+        h, q = 12, 2
+        worst = maximum(abs((v_r[i,h,q] - v_r[j,h,q]) -
+                            (CASE.R[(i,j)] * Ibr_r[((i,j),h,q)] -
+                             CASE.X[(i,j)] * Ibr_im[((i,j),h,q)]))
+                        for (i, j) in CASE.BRANCH_SET)
+        @test worst < 1e-9
+
+        # a non-zero dispatch must raise voltages relative to the base case
+        some_dg = fill(0.05, ndg(CASE), 24, 4)
+        v_r2, v_im2, _, _, _, _ = SmartInverterDOPF._sweep_state(CASE, some_dg, zero_dg)
+        @test mean(sqrt.(v_r2 .^ 2 .+ v_im2 .^ 2)) > mean(V)
     end
 
     @testset "LinDistFlow host builds" begin

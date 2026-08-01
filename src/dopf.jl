@@ -53,22 +53,36 @@ the Volt-VAr droop encoded by `method` (`:bigm`, `:lambda` or `:heaviside`).
   identity falls below `tol`. Near-exact, at the cost of an outer loop.
 - `:lindistflow` — the linearised branch-flow model: losses dropped from the balance and
   the voltage drop taken as `-(R·P + X·Q)/Vnom`. Wholly linear, solved **once**, so
-  `max_iter` and `tol` are ignored. Much cheaper, at the cost of the linearisation
-  error. `Ploss` is then a post-hoc estimate (see [`DOPFResult`](@ref)).
+  `max_iter` and `tol` are ignored. Much cheaper, at the cost of accuracy. `Ploss` is
+  then a post-hoc estimate (see [`DOPFResult`](@ref)).
+
+`warm_start = :lindistflow` solves the linear host first and expands its dispatch into a
+consistent complex state with an exact power-flow sweep, using that as the initial
+linearisation point instead of a flat profile. On the bundled case this halves the number
+of passes and is about 1.7× faster overall, and reaches the same answer.
 
 `optimizer` must match the droop encoding: an MILP solver for `:bigm` and `:lambda`, an
 NLP solver for `:heaviside`.
+
+!!! note "Which host for quantitative work"
+    `:ivacopf`. Audited against an exact AC power flow on the bundled case, its dispatch
+    reproduces the true solution to ~1e-9 p.u. and sits on the droop to ~1e-7, while the
+    LinDistFlow dispatch is off the droop by 6% of inverter rating and puts 17 of the 96
+    time steps below the lower voltage limit. `:lindistflow` is for a fast first look and
+    for warm-starting, not for reporting.
 
 ```julia
 using SmartInverterDOPF, Gurobi
 case = load_case()
 res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)                      # IVACOPF
+warm = solve_dopf(case, Gurobi.Optimizer; method = :lambda, warm_start = :lindistflow)
 fast = solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow) # one LP/MILP
 ```
 """
 function solve_dopf(c::Case, optimizer;
                     method::Symbol = :lambda,
                     host::Symbol = :ivacopf,
+                    warm_start::Union{Nothing,Symbol} = nothing,
                     curve::DroopCurve = ieee1547_curve(),
                     max_iter::Int = 15,
                     tol::Float64 = 1e-6,
@@ -90,13 +104,29 @@ function solve_dopf(c::Case, optimizer;
     nb                    = length(BUS_SET)
     qbar                  = Dict(d => c.Sdg_max[d] for d in DG_SET)   # reactive capability
 
-    # linearisation point, initialised at a flat start
+    # Linearisation point. A flat start (v = 1∠0, all currents zero) is far from any
+    # solution, and the trajectory the successive linearisation then follows depends on
+    # it. `warm_start = :lindistflow` instead solves the linear host first and expands
+    # its dispatch into a consistent complex state with an exact power-flow sweep, so
+    # the first linearisation is taken about a point that is already close.
     v_r_pr    = ones(nb, 24, 4)
     v_im_pr   = zeros(nb, 24, 4)
     Ibs_r_pr  = zeros(nb, 24, 4)
     Ibs_im_pr = zeros(nb, 24, 4)
     Ibr_r_pr  = Dict((br, h, q) => 0.0 for br in BRANCH_SET, h in HOUR_SET, q in QUARTER_SET)
     Ibr_im_pr = Dict((br, h, q) => 0.0 for br in BRANCH_SET, h in HOUR_SET, q in QUARTER_SET)
+    warm_seconds = 0.0
+
+    if warm_start === :lindistflow
+        warm_seconds = @elapsed begin
+            seed = _solve_lindistflow(c, optimizer; method, curve, silent,
+                                      time_limit_sec, attributes)
+            v_r_pr, v_im_pr, Ibs_r_pr, Ibs_im_pr, Ibr_r_pr, Ibr_im_pr =
+                _sweep_state(c, seed.Pdg, seed.Qdg)
+        end
+    elseif warm_start !== nothing
+        throw(ArgumentError("warm_start must be nothing or :lindistflow, got :$warm_start"))
+    end
 
     log = NamedTuple{(:iter, :seconds, :objective, :residual, :status),
                      Tuple{Int,Float64,Float64,Float64,String}}[]
@@ -275,8 +305,67 @@ function solve_dopf(c::Case, optimizer;
         end
     end
 
+    # the warm-start solve is part of the cost of the answer, so it is counted
     return DOPFResult(result.V, result.Vdg, result.Qdg, result.Pdg, result.PVC,
-                      result.Ploss, log, nvar, nbin, ncon, converged, total_solve)
+                      result.Ploss, log, nvar, nbin, ncon, converged,
+                      total_solve + warm_seconds)
+end
+
+# Expand an inverter dispatch into a full complex network state with an exact
+# backward/forward sweep, and return it in the form the IVACOPF linearisation expects.
+#
+# The sweep solves the true AC power flow for the given injections, so the resulting
+# point satisfies Ohm's law and KCL exactly — unlike the LinDistFlow solution it is
+# derived from, which satisfies neither. That is the whole value of it as a starting
+# point: `Pdg`/`Qdg` supply a sensible *dispatch*, and the sweep turns it into a
+# physically consistent *state*.
+function _sweep_state(c::Case, Pdg::Array{Float64,3}, Qdg::Array{Float64,3})
+    nb, nbr = length(c.BUS_SET), length(c.BRANCH_SET)
+    dgpos   = Dict(d => i for (i, d) in enumerate(c.DG_SET))
+
+    v_r  = ones(nb, 24, 4);  v_im  = zeros(nb, 24, 4)
+    Ibs_r = zeros(nb, 24, 4); Ibs_im = zeros(nb, 24, 4)
+    Ibr_r  = Dict((br, h, q) => 0.0 for br in c.BRANCH_SET, h in c.HOUR_SET, q in c.QUARTER_SET)
+    Ibr_im = Dict((br, h, q) => 0.0 for br in c.BRANCH_SET, h in c.HOUR_SET, q in c.QUARTER_SET)
+
+    for h in c.HOUR_SET, q in c.QUARTER_SET
+        # net consumption at each bus: load minus whatever the inverters inject
+        Snet = map(c.BUS_SET) do b
+            P = c.Pload[b,h,q]; Q = c.Qload[b,h,q]
+            if haskey(dgpos, b)
+                P -= Pdg[dgpos[b],h,q]; Q -= Qdg[dgpos[b],h,q]
+            end
+            ComplexF64(P, Q)
+        end
+
+        Vc  = ones(ComplexF64, nb)
+        Ibr = zeros(ComplexF64, nbr)
+        for _ in 1:40
+            Ibus = [conj(Snet[b] / Vc[b]) for b in c.BUS_SET]
+            for k in nbr:-1:1                                     # backward: currents
+                (_, j) = c.BRANCH_SET[k]
+                Ibr[k] = Ibus[j] + sum(Ibr[t] for t in 1:nbr
+                                       if c.BRANCH_SET[t][1] == j; init = 0.0 + 0.0im)
+            end
+            for k in 1:nbr                                        # forward: voltages
+                (i, j) = c.BRANCH_SET[k]
+                Vc[j] = Vc[i] - (c.R[(i,j)] + im*c.X[(i,j)]) * Ibr[k]
+            end
+        end
+
+        for b in c.BUS_SET
+            v_r[b,h,q] = real(Vc[b]); v_im[b,h,q] = imag(Vc[b])
+            # bus injection current, in the IVACOPF sign convention
+            # (KCL there reads Ibs = outgoing − incoming, i.e. minus the load current)
+            Ibus_b = conj(Snet[b] / Vc[b])
+            Ibs_r[b,h,q] = -real(Ibus_b); Ibs_im[b,h,q] = -imag(Ibus_b)
+        end
+        for k in 1:nbr
+            br = c.BRANCH_SET[k]
+            Ibr_r[(br,h,q)] = real(Ibr[k]); Ibr_im[(br,h,q)] = imag(Ibr[k])
+        end
+    end
+    return v_r, v_im, Ibs_r, Ibs_im, Ibr_r, Ibr_im
 end
 
 # The linearised branch-flow (LinDistFlow) host. Same droop module, same inverter

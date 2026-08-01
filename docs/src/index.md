@@ -54,6 +54,21 @@ The droop needs a network model to sit inside. Either of these can be selected w
 | `:ivacopf` *(default)* | **IVACOPF** — current-voltage AC-OPF | very accurate, near-exact AC | iterative: re-linearised until the residual of the exact power-flow identity clears a tolerance |
 | `:lindistflow` | **LinDistFlow** — linearised branch flow | approximate: losses dropped, small voltage deviations assumed | run once, much faster and far cheaper |
 
+!!! warning "Use `:ivacopf` for quantitative work"
+    Audited against an exact AC power flow on the bundled case, the IVACOPF dispatch
+    reproduces the true solution to ~10⁻⁹ p.u. and sits on the droop curve to ~10⁻⁷. The
+    LinDistFlow dispatch is off the droop by 6 % of inverter rating and puts 17 of the 96
+    time steps below the lower voltage limit — it is not deliverable. `:lindistflow` is
+    for a fast first look and for warm-starting, not for reporting.
+
+The cheap host also makes the accurate one cheaper. `warm_start = :lindistflow` seeds the
+IVACOPF linearisation from the LinDistFlow solution instead of a flat profile, which on
+the bundled case halves the passes and is ~1.7× faster overall, for the same answer:
+
+```julia
+solve_dopf(case, Gurobi.Optimizer; method = :lambda, warm_start = :lindistflow)
+```
+
 ## What's in the box
 
 - **Two host models** — IVACOPF and LinDistFlow — interchangeable behind one keyword.
