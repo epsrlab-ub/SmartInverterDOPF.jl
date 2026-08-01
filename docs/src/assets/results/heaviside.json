@@ -1,5 +1,5 @@
 {
-    "solve_seconds": 25.730463,
+    "solve_seconds": 43.069804000000005,
     "method": "heaviside",
     "E_curt_kWh": 3022.0726213659514,
     "Qdg_series": [
@@ -1190,21 +1190,21 @@
             "status": "ALMOST_LOCALLY_SOLVED",
             "objective": 1.4752864042552094,
             "iter": 1,
-            "seconds": 9.9813545,
+            "seconds": 16.2288241,
             "residual": 0.002822991178495534
         },
         {
             "status": "LOCALLY_SOLVED",
             "objective": 1.2332988659738118,
             "iter": 2,
-            "seconds": 8.6635461,
+            "seconds": 13.7593007,
             "residual": 0.00025201562459121335
         },
         {
             "status": "LOCALLY_SOLVED",
             "objective": 1.2088290485463813,
             "iter": 3,
-            "seconds": 7.0855624,
+            "seconds": 13.0816792,
             "residual": 2.230857907813133e-7
         }
     ],
