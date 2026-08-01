@@ -1,5 +1,5 @@
 {
-    "solve_seconds": 24.0257591,
+    "solve_seconds": 25.591795299999998,
     "method": "bigm",
     "E_curt_kWh": 3022.0487493551864,
     "Qdg_series": [
@@ -1190,28 +1190,28 @@
             "status": "OPTIMAL",
             "objective": 1.4752863995823498,
             "iter": 1,
-            "seconds": 0.8559797,
+            "seconds": 0.9496486,
             "residual": 0.002853663112649644
         },
         {
             "status": "OPTIMAL",
             "objective": 1.2470365576879714,
             "iter": 2,
-            "seconds": 4.8133598,
+            "seconds": 4.1636129,
             "residual": 0.000837654913296907
         },
         {
             "status": "OPTIMAL",
             "objective": 1.2092429251780779,
             "iter": 3,
-            "seconds": 13.6771798,
+            "seconds": 14.8643242,
             "residual": 1.0919775091048495e-6
         },
         {
             "status": "OPTIMAL",
             "objective": 1.2088194997420747,
             "iter": 4,
-            "seconds": 4.6792398,
+            "seconds": 5.6142096,
             "residual": 5.356592073321273e-8
         }
     ],
