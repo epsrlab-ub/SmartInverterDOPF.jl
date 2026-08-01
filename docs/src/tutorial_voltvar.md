@@ -104,7 +104,7 @@ Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
 
 ## Why the curve has to live inside the OPF
 
-IEEE 1547-2018 requires every interconnecting distributed energy resource to be capable
+IEEE 1547-2018 [[1]](#ref-1) requires every interconnecting distributed energy resource to be capable
 of Volt-VAr control. The utility enables the function and sets the curve; the inverter
 then runs it autonomously as a local feedback law. An advanced distribution management
 system can coordinate hundreds of these inverters through a distribution OPF — but only
@@ -193,7 +193,7 @@ different question, and that choice determines everything else about it:
 | model class | MILP | MILP | NLP, non-smooth |
 | anything to tune? | yes — the value of ``M`` | no | no |
 | if breakpoints become variables | reformulation stops being exact | one bilinear term, still tractable | stays exact, still non-smooth |
-| introduced in | [[5]](#ref-5) | [[6]](#ref-6), [[7]](#ref-7) | [[8]](#ref-8) |
+| introduced in | [[5]](#ref-5) | [[6]](#ref-6), [[7]](#ref-7) | [[10]](#ref-10) |
 
 The three columns are three answers to one question — how do you say "it depends" to a
 solver — and each pays for exactness in a different currency: a constant you must choose,
@@ -503,7 +503,7 @@ can only choose active power and live with the reactive response the curve produ
 ## Method A — Big-M
 
 *Following Savasci, Inaolaji and Paudyal [[5]](#ref-5), where this formulation was introduced for
-a second-order-cone DOPF; also Chapter 4 of Inaolaji's dissertation [[10]](#ref-10).*
+a second-order-cone DOPF; also Chapter 4 of Inaolaji's dissertation [[9]](#ref-9).*
 
 **The idea in one sentence.** Give every segment its own on/off switch, and write
 constraints that are *switched off* — made trivially true — whenever their segment is
@@ -674,7 +674,7 @@ formulation instead.
 
 *Following Inaolaji, Savasci and Paudyal [[6]](#ref-6) and its three-phase extension [[7]](#ref-7), which
 apply the classical lambda method to Volt-VAr and Volt-Watt droops on a LinDistFlow
-host; see also Chapter 5 of [[10]](#ref-10).*
+host; see also Chapter 5 of [[9]](#ref-9).*
 
 **The idea in one sentence.** Instead of asking *which segment am I on*, describe the
 operating point directly as a blend of two neighbouring breakpoints.
@@ -787,20 +787,20 @@ constraint ``v_i = \sum_b \lambda_b V^{\text{bp}}_b`` becomes bilinear in ``\lam
 McCormick envelope, tightened by partitioning the breakpoint range if the relaxation is
 too loose — rather than the tangle Big-M produces when ``W_b = \delta_b v_i`` stops being
 a binary-times-continuous product. This is why work on optimised and adaptive droop
-curves is normally built on Lambda [[9]](#ref-9), [[11]](#ref-11).
+curves is normally built on Lambda [[8]](#ref-8), [[11]](#ref-11).
 
 ## Method C — Heaviside
 
-*Following Inaolaji, Savasci and Paudyal [[8]](#ref-8), which introduced this encoding precisely
+*Following Inaolaji, Savasci and Paudyal [[10]](#ref-10), which introduced this encoding precisely
 to remove the integer variables from the two formulations above, on the same
-current–voltage DOPF host used here; see also Chapter 6 of [[10]](#ref-10).*
+current–voltage DOPF host used here; see also Chapter 6 of [[9]](#ref-9).*
 
 **The idea in one sentence.** Keep the case distinction, but write it as arithmetic
 instead of logic — so there is nothing for a solver to branch on.
 
 Both previous methods spend integer variables to answer "which segment?". Integers are
 what make a model combinatorial: the count grows with inverters × time steps, and
-branch-and-bound has to search over them. The motivation in [[8]](#ref-8) is to get rid of them
+branch-and-bound has to search over them. The motivation in [[10]](#ref-10) is to get rid of them
 altogether, which also makes the model a candidate for real-time use.
 
 The observation is that an "if" is just an on/off switch, and the unit step *is* an
@@ -1228,6 +1228,7 @@ built on Lambda.
 **[1]** IEEE Std 1547-2018, *IEEE Standard for Interconnection and Interoperability of
 Distributed Energy Resources with Associated Electric Power Systems Interfaces*.
 [doi:10.1109/IEEESTD.2018.8332112](https://doi.org/10.1109/IEEESTD.2018.8332112)
+
 ```@raw html
 <a id="ref-2"></a>
 ```
@@ -1235,6 +1236,7 @@ Distributed Energy Resources with Associated Electric Power Systems Interfaces*.
 reduction and load balancing," *IEEE Transactions on Power Delivery*, vol. 4, no. 2,
 pp. 1401–1407, 1989. [doi:10.1109/61.25627](https://doi.org/10.1109/61.25627)
 — the branch-flow (DistFlow) model that LinDistFlow linearises
+
 ```@raw html
 <a id="ref-3"></a>
 ```
@@ -1243,6 +1245,7 @@ by distributed photovoltaic generators," *2010 First IEEE International Conferen
 Smart Grid Communications (SmartGridComm)*, pp. 79–84, 2010.
 [doi:10.1109/SMARTGRID.2010.5622021](https://doi.org/10.1109/SMARTGRID.2010.5622021)
 — **LinDistFlow**, available here as `host = :lindistflow`
+
 ```@raw html
 <a id="ref-4"></a>
 ```
@@ -1253,7 +1256,7 @@ Optimal Power Flow for Advanced Distribution Management System Applications,"
 — **IVACOPF**, the origin of the current-voltage host; the successive-linearisation
 scheme built on it here is developed further in [[11]](#ref-11)
 
-**Embedding the droop in a distribution OPF**
+**Embedding the Volt-VAr droop curve in a distribution OPF**
 
 ```@raw html
 <a id="ref-5"></a>
@@ -1263,6 +1266,7 @@ Integrating Volt-Var Droop of Smart Inverters," *2021 IEEE Green Technologies
 Conference (GreenTech)*, pp. 54–59, 2021.
 [doi:10.1109/GreenTech48523.2021.00020](https://doi.org/10.1109/GreenTech48523.2021.00020)
 — **Big-M**, on a second-order-cone DOPF
+
 ```@raw html
 <a id="ref-6"></a>
 ```
@@ -1272,6 +1276,7 @@ Society Annual Meeting (IAS)*, 2021.
 [doi:10.1109/IAS48185.2021.9715792](https://doi.org/10.1109/IAS48185.2021.9715792)
 — **Lambda / SOS2**, on a LinDistFlow host; also the source of the breakpoints and the
 16-segment capability polygon used here
+
 ```@raw html
 <a id="ref-7"></a>
 ```
@@ -1280,29 +1285,35 @@ Unbalanced Multiphase Networks with Volt-VAr and Volt-Watt Droop Settings of Sma
 Inverters," *IEEE Transactions on Industry Applications*, vol. 58, no. 5, 2022.
 [doi:10.1109/TIA.2022.3181110](https://doi.org/10.1109/TIA.2022.3181110)
 — Lambda, extended to three-phase unbalanced networks
+
 ```@raw html
 <a id="ref-8"></a>
 ```
-**[8]** A. Inaolaji, A. Savasci, and S. Paudyal, "Optimal Droop Settings of Smart Inverters,"
-*2021 IEEE 48th Photovoltaic Specialists Conference (PVSC)*, pp. 2584–2589, 2021.
-[doi:10.1109/PVSC43889.2021.9518650](https://doi.org/10.1109/PVSC43889.2021.9518650)
-— **Heaviside**, integer-free, on a current–voltage DOPF solved with Ipopt/JuMP. This paper also **optimises the droop curve itself**: the breakpoint voltages are decision variables of the DOPF, not fixed settings, so it belongs to the group below as much as to this one
-```@raw html
-<a id="ref-9"></a>
-```
-**[9]** A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow with
+**[8]** A. Savasci, A. Inaolaji, and S. Paudyal, "Distribution Grid Optimal Power Flow with
 Adaptive Volt-VAr Droop of Smart Inverters," *2021 IEEE Industry Applications Society
 Annual Meeting (IAS)*, 2021.
 [doi:10.1109/IAS48185.2021.9677119](https://doi.org/10.1109/IAS48185.2021.9677119)
 — Big-M with an adaptive ``Q(\Delta V)`` droop responding to temporal voltage deviation
+
 ```@raw html
-<a id="ref-10"></a>
+<a id="ref-9"></a>
 ```
-**[10]** A. Inaolaji, *Accurate and Efficient Optimal Power Flow Methods with Control of Smart
+**[9]** A. Inaolaji, *Accurate and Efficient Optimal Power Flow Methods with Control of Smart
 Inverters*, PhD dissertation, Florida International University, 2023. — book-length
 treatment covering all three encodings and the host models they sit in
 
-**Optimising the curve itself**
+**Optimising the Volt-VAr droop curve itself**
+
+```@raw html
+<a id="ref-10"></a>
+```
+**[10]** A. Inaolaji, A. Savasci, and S. Paudyal, "Optimal Droop Settings of Smart Inverters,"
+*2021 IEEE 48th Photovoltaic Specialists Conference (PVSC)*, pp. 2584–2589, 2021.
+[doi:10.1109/PVSC43889.2021.9518650](https://doi.org/10.1109/PVSC43889.2021.9518650)
+— the source of the **Heaviside** encoding used here: integer-free, on a current–voltage
+DOPF solved with Ipopt/JuMP. It is listed in this group because the breakpoint voltages
+are themselves decision variables of the DOPF rather than fixed settings — the curve is
+optimised, not merely respected
 
 ```@raw html
 <a id="ref-11"></a>
