@@ -4,8 +4,10 @@
 Embedding the IEEE 1547 Volt-VAr (Q-V) droop curve of smart inverters into a
 distribution optimal power flow.
 
-The package provides one distribution OPF — a current-voltage AC-OPF solved by
-successive linearisation — and three interchangeable encodings of the droop law:
+The package provides two distribution OPF host models and three interchangeable
+encodings of the droop law, chosen independently of one another.
+
+Droop encodings (`method`):
 
 | method | class | requires |
 |:--|:--|:--|
@@ -16,10 +18,18 @@ successive linearisation — and three interchangeable encodings of the droop la
 All three describe the same curve and return the same dispatch; they differ in the
 solver technology they need and in how they scale.
 
+Host models (`host`):
+
+| host | model | accuracy | solve |
+|:--|:--|:--|:--|
+| `:ivacopf` (default) | current-voltage AC-OPF | very accurate, near-exact AC | iterative successive linearisation |
+| `:lindistflow` | linearised branch flow | approximate — losses dropped | run once, much faster |
+
 ```julia
 using SmartInverterDOPF, Gurobi
 case = load_case()
-res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)
+res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)                      # IVACOPF
+fast = solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow) # LinDistFlow
 ```
 
 !!! warning

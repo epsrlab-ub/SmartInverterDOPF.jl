@@ -8,8 +8,8 @@ Embedding IEEE 1547 Volt-VAr droop curves into distribution optimal power flow.
 A smart inverter does not accept a reactive-power set-point. It follows a Volt-VAr
 curve, deciding from its own terminal voltage how much reactive power to inject or
 absorb. An OPF that ignores that curve returns a dispatch the inverter is never going to
-deliver. This package puts the curve inside the optimisation — three different ways —
-and shows that all three agree.
+deliver. This package puts the curve inside the optimisation — three different ways, on
+either of two distribution OPF host models — and shows that the encodings agree.
 
 **[Read the tutorial →](https://ra-emami.github.io/SmartInverterDOPF.jl/dev/tutorial_voltvar/)**
 
@@ -25,10 +25,24 @@ Pkg.add(["Gurobi", "Ipopt"])
 using SmartInverterDOPF, Gurobi
 
 case = load_case()
-res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)
+res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)   # host = :ivacopf (default)
 
 kWh(case, sum(res.PVC))     # PV energy curtailed over the day, kWh
 extrema(res.V)              # voltage range across the feeder, p.u.
+```
+
+## The two host models
+
+`method` picks how the droop curve is encoded; `host` picks the network model it sits
+inside. They are independent — the droop constraints are identical in both hosts.
+
+| `host` | model | accuracy | solve |
+|:--|:--|:--|:--|
+| `:ivacopf` *(default)* | current-voltage AC-OPF ([doi:10.1109/OJIA.2024.3367547](https://doi.org/10.1109/OJIA.2024.3367547), extended in [doi:10.1016/j.epsr.2026.113613](https://doi.org/10.1016/j.epsr.2026.113613)) | very accurate, near-exact AC | **iterative** — re-linearised until the residual of the exact power-flow identity clears a tolerance |
+| `:lindistflow` | linearised branch flow ([doi:10.1109/SMARTGRID.2010.5622021](https://doi.org/10.1109/SMARTGRID.2010.5622021)) | approximate — losses dropped, small voltage deviations assumed | run **once**, much faster and far lower computational effort |
+
+```julia
+solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow)
 ```
 
 > **Solver note.** The committed results are generated with **Gurobi**, which is

@@ -5,16 +5,23 @@
 A smart inverter does not take a reactive-power set-point — it follows a Volt-VAr curve
 based on its own terminal voltage. An OPF that ignores that curve returns a dispatch the
 inverter will never deliver. This package puts the curve inside the optimisation, three
-different ways, and shows that they agree.
+different ways, on either of two distribution OPF **host** models, and shows that the
+encodings agree.
 
 ```julia
 using SmartInverterDOPF, Gurobi
 
 case = load_case()
-res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)
+res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)   # host = :ivacopf (default)
 
 kWh(case, sum(res.PVC))     # PV energy curtailed over the day
 extrema(res.V)              # voltage range across the feeder
+```
+
+The `host` keyword picks the network model; the droop encoding is unchanged by it:
+
+```julia
+solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow)
 ```
 
 ## The three encodings
@@ -37,10 +44,19 @@ The [Tutorial](@ref "Embedding the Volt-VAr droop into a distribution OPF") deri
 three, verifies that every optimised operating point lands on the curve, and compares
 them side by side.
 
+## The two host models
+
+The droop needs a network model to sit inside. Either of these can be selected with
+`host`, and the droop constraints are identical in both:
+
+| `host` | model | accuracy | solve |
+|:--|:--|:--|:--|
+| `:ivacopf` *(default)* | **IVACOPF** — current-voltage AC-OPF | very accurate, near-exact AC | iterative: re-linearised until the residual of the exact power-flow identity clears a tolerance |
+| `:lindistflow` | **LinDistFlow** — linearised branch flow | approximate: losses dropped, small voltage deviations assumed | run once, much faster and far cheaper |
+
 ## What's in the box
 
-- A **current-voltage AC-OPF** (IVACOPF) host model, solved by successive linearisation,
-  with convergence checked against the exact nonlinear power-flow identity.
+- **Two host models** — IVACOPF and LinDistFlow — interchangeable behind one keyword.
 - The **IEEE 33-bus** feeder over 24 h at 15-minute resolution, with per-class load
   shapes and a clear-sky PV profile.
 - Three smart inverters, an inverter capability polygon, and a curtailment-minimising

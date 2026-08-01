@@ -1,6 +1,8 @@
 using SmartInverterDOPF
 using JuMP
 using Test
+using HiGHS   # model construction only — see the LinDistFlow testset
+using Ipopt
 
 const CASE = load_case()
 
@@ -102,6 +104,40 @@ const CASE = load_case()
 
         @test_throws MethodError SmartInverterDOPF.add_droop!(
             Model(), :not_a_method, ieee1547_curve(), nothing, nothing, [1], 1:1, 1:1, Dict())
+    end
+
+    @testset "host selection" begin
+        # only the two implemented hosts are accepted, and the check happens before
+        # any model is built (so it needs no solver)
+        @test_throws ArgumentError solve_dopf(CASE, nothing; host = :nonsense)
+        @test_throws ArgumentError solve_dopf(CASE, nothing; host = :lindistflow_typo)
+    end
+
+    @testset "LinDistFlow host builds" begin
+        # Structure only — no solve, so this needs no solver licence. (Neither HiGHS nor
+        # GLPK completes this model; see the solver note in the documentation.)
+        nsteps = 24 * 4
+        # the MILP encodings build against an MILP solver, the NLP one against Ipopt
+        for (method, want_bin, opt) in ((:bigm, 5, HiGHS.Optimizer),
+                                        (:lambda, 5, HiGHS.Optimizer),
+                                        (:heaviside, 0, Ipopt.Optimizer))
+            b = SmartInverterDOPF._build_lindistflow(
+                    CASE, opt; method = method, curve = ieee1547_curve(),
+                    silent = true, time_limit_sec = nothing,
+                    attributes = Dict{String,Any}())
+
+            # five binaries per inverter per time step for the MILP encodings, none for
+            # the Heaviside one — the same counts the IVACOPF host produces, because the
+            # droop block is shared verbatim between the two hosts
+            @test count(is_binary, all_variables(b.model)) == want_bin * ndg(CASE) * nsteps
+
+            # the network model itself is linear: every constraint an affine one, so a
+            # LinDistFlow model with an integer-free droop is a pure LP
+            @test num_constraints(b.model; count_variable_in_set_constraints = false) > 0
+            @test length(b.v) == nbus(CASE) * nsteps
+            @test length(b.Pbr) == length(CASE.BRANCH_SET) * nsteps
+            @test objective_sense(b.model) == MIN_SENSE
+        end
     end
 
     @testset "base-case power flow" begin

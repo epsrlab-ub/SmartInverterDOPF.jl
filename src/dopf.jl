@@ -15,6 +15,12 @@ Outcome of [`solve_dopf`](@ref).
 | `nvar`, `nbin`, `ncon` | size of the model actually handed to the solver |
 | `converged` | whether the residual fell below `tol` |
 | `solve_seconds` | summed solver time over all iterations |
+
+Two fields read differently under `host = :lindistflow`, which has no outer loop:
+`iterations` holds a single entry with `residual = 0.0`, and `converged` is always `true`
+because there is nothing to converge — the model is linear and solved once. `Ploss` is
+then a post-hoc estimate `Σ R(P² + Q²)/v²` from the solved flows rather than a modelled
+quantity, since LinDistFlow drops losses from the power balance.
 """
 struct DOPFResult
     V::Array{Float64,3}
@@ -33,31 +39,47 @@ struct DOPFResult
 end
 
 """
-    solve_dopf(case, optimizer; method = :lambda, curve = ieee1547_curve(),
-               max_iter = 15, tol = 1e-6, silent = true)
+    solve_dopf(case, optimizer; method = :lambda, host = :ivacopf,
+               curve = ieee1547_curve(), max_iter = 15, tol = 1e-6, silent = true)
 
-Minimise total PV curtailment over the day subject to the IVACOPF network model and
+Minimise total PV curtailment over the day subject to a distribution network model and
 the Volt-VAr droop encoded by `method` (`:bigm`, `:lambda` or `:heaviside`).
 
-The AC power flow enters through two bilinear identities — the `v·I` power balance and
-the `|I|²` loss — which are linearised about the previous iterate and refreshed until
-the residual of the exact loss identity falls below `tol`. `optimizer` must therefore
-match the droop encoding: an MILP solver for `:bigm` and `:lambda`, an NLP solver for
-`:heaviside`.
+`host` selects the network model, and the droop encoding is identical in both:
+
+- `:ivacopf` (default) — current-voltage AC-OPF. The AC power flow enters through two
+  bilinear identities, the `v·I` power balance and the `|I|²` loss, which are linearised
+  about the previous iterate and refreshed until the residual of the *exact* loss
+  identity falls below `tol`. Near-exact, at the cost of an outer loop.
+- `:lindistflow` — the linearised branch-flow model: losses dropped from the balance and
+  the voltage drop taken as `-(R·P + X·Q)/Vnom`. Wholly linear, solved **once**, so
+  `max_iter` and `tol` are ignored. Much cheaper, at the cost of the linearisation
+  error. `Ploss` is then a post-hoc estimate (see [`DOPFResult`](@ref)).
+
+`optimizer` must match the droop encoding: an MILP solver for `:bigm` and `:lambda`, an
+NLP solver for `:heaviside`.
 
 ```julia
 using SmartInverterDOPF, Gurobi
-res = solve_dopf(load_case(), Gurobi.Optimizer; method = :lambda)
+case = load_case()
+res  = solve_dopf(case, Gurobi.Optimizer; method = :lambda)                      # IVACOPF
+fast = solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow) # one LP/MILP
 ```
 """
 function solve_dopf(c::Case, optimizer;
                     method::Symbol = :lambda,
+                    host::Symbol = :ivacopf,
                     curve::DroopCurve = ieee1547_curve(),
                     max_iter::Int = 15,
                     tol::Float64 = 1e-6,
                     silent::Bool = true,
                     time_limit_sec = 3600,
                     attributes = Dict{String,Any}())
+
+    host in (:ivacopf, :lindistflow) ||
+        throw(ArgumentError("host must be :ivacopf or :lindistflow, got :$host"))
+    host === :lindistflow && return _solve_lindistflow(c, optimizer; method, curve,
+                                                       silent, time_limit_sec, attributes)
 
     HOUR_SET, QUARTER_SET = c.HOUR_SET, c.QUARTER_SET
     BUS_SET, BRANCH_SET   = c.BUS_SET, c.BRANCH_SET
@@ -255,6 +277,125 @@ function solve_dopf(c::Case, optimizer;
 
     return DOPFResult(result.V, result.Vdg, result.Qdg, result.Pdg, result.PVC,
                       result.Ploss, log, nvar, nbin, ncon, converged, total_solve)
+end
+
+# The linearised branch-flow (LinDistFlow) host. Same droop module, same inverter
+# constraints, same objective — only the network model differs, and there is no outer
+# loop because nothing in it is nonlinear.
+#
+# Building and solving are split so the model can be inspected without a solver licence.
+function _build_lindistflow(c::Case, optimizer;
+                            method::Symbol, curve::DroopCurve, silent::Bool,
+                            time_limit_sec, attributes)
+
+    HOUR_SET, QUARTER_SET = c.HOUR_SET, c.QUARTER_SET
+    BUS_SET, BRANCH_SET   = c.BUS_SET, c.BRANCH_SET
+    DG_SET, NON_DG_SET    = c.DG_SET, c.NON_DG_SET
+    SLACK_SET             = [c.slack]
+    R, X                  = c.R, c.X
+    qbar                  = Dict(d => c.Sdg_max[d] for d in DG_SET)
+
+    model = Model(optimizer)
+    silent && set_silent(model)
+    for (k, val) in attributes
+        set_optimizer_attribute(model, k, val)
+    end
+    time_limit_sec === nothing || set_time_limit_sec(model, time_limit_sec)
+
+    @variable(model, Pgen[SLACK_SET, HOUR_SET, QUARTER_SET])
+    @variable(model, Qgen[SLACK_SET, HOUR_SET, QUARTER_SET])
+    @variable(model, c.Vmin <= v[BUS_SET, HOUR_SET, QUARTER_SET] <= c.Vmax, start = c.Vnom)
+    @variable(model, Pbr[BRANCH_SET, HOUR_SET, QUARTER_SET])
+    @variable(model, Qbr[BRANCH_SET, HOUR_SET, QUARTER_SET])
+    @variable(model, 0 <= Pdg[DG_SET, HOUR_SET, QUARTER_SET])
+    @variable(model, Qdg[DG_SET, HOUR_SET, QUARTER_SET], start = 0)
+    @variable(model, 0 <= PVC[DG_SET, HOUR_SET, QUARTER_SET])
+
+    # ---- the droop module: byte-for-byte the same call as the IVACOPF host ----------
+    add_droop!(model, method, curve, v, Qdg, DG_SET, HOUR_SET, QUARTER_SET, qbar)
+
+    # ---- inverter capability and limits (identical to the IVACOPF host) -------------
+    k = 16
+    for l in 1:k
+        θ = l * π / k
+        @constraint(model, [d in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+            cos(θ) * Pdg[d,h,m] + sin(θ) * Qdg[d,h,m] <=  c.Sdg_max[d])
+        @constraint(model, [d in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+            cos(θ) * Pdg[d,h,m] + sin(θ) * Qdg[d,h,m] >= -c.Sdg_max[d])
+    end
+    @constraint(model, [d in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        Pdg[d,h,m] <= c.Pdg_max_vary[d][h,m])
+    @constraint(model, [d in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        Pdg[d,h,m] <= c.Pdg_max[d])
+    @constraint(model, [d in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        Qdg[d,h,m] <= c.Sdg_max[d])
+
+    # ---- slack reference ------------------------------------------------------------
+    @constraint(model, [i in SLACK_SET, h in HOUR_SET, m in QUARTER_SET], v[i,h,m] == c.Vnom)
+
+    # ---- power balance: net injection = outflow − inflow, losses neglected ----------
+    outflow(P, b, h, m) = sum(P[(i,j),h,m] for (i,j) in BRANCH_SET if i == b; init = 0.0)
+    inflow(P, b, h, m)  = sum(P[(i,j),h,m] for (i,j) in BRANCH_SET if j == b; init = 0.0)
+
+    @constraint(model, [b in SLACK_SET, h in HOUR_SET, m in QUARTER_SET],
+        Pgen[b,h,m] - c.Pload[b,h,m] == outflow(Pbr, b, h, m) - inflow(Pbr, b, h, m))
+    @constraint(model, [b in SLACK_SET, h in HOUR_SET, m in QUARTER_SET],
+        Qgen[b,h,m] - c.Qload[b,h,m] == outflow(Qbr, b, h, m) - inflow(Qbr, b, h, m))
+    @constraint(model, [b in NON_DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        -c.Pload[b,h,m] == outflow(Pbr, b, h, m) - inflow(Pbr, b, h, m))
+    @constraint(model, [b in NON_DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        -c.Qload[b,h,m] == outflow(Qbr, b, h, m) - inflow(Qbr, b, h, m))
+    @constraint(model, [b in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        Pdg[b,h,m] - c.Pload[b,h,m] == outflow(Pbr, b, h, m) - inflow(Pbr, b, h, m))
+    @constraint(model, [b in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        Qdg[b,h,m] - c.Qload[b,h,m] == outflow(Qbr, b, h, m) - inflow(Qbr, b, h, m))
+
+    # ---- voltage drop along each branch ---------------------------------------------
+    @constraint(model, [(i,j) in BRANCH_SET, h in HOUR_SET, m in QUARTER_SET],
+        v[j,h,m] == v[i,h,m] -
+            (R[(i,j)] * Pbr[(i,j),h,m] + X[(i,j)] * Qbr[(i,j),h,m]) / c.Vnom)
+
+    # ---- curtailment and objective (identical to the IVACOPF host) ------------------
+    @constraint(model, [d in DG_SET, h in HOUR_SET, m in QUARTER_SET],
+        PVC[d,h,m] == c.Pdg_max_vary[d][h,m] - Pdg[d,h,m])
+    @objective(model, Min, sum(PVC[d,h,m] for d in DG_SET, h in HOUR_SET, m in QUARTER_SET))
+
+    return (; model, v, Pbr, Qbr, Pdg, Qdg, PVC)
+end
+
+function _solve_lindistflow(c::Case, optimizer; kwargs...)
+    b = _build_lindistflow(c, optimizer; kwargs...)
+    model, v, Pbr, Qbr = b.model, b.v, b.Pbr, b.Qbr
+    Pdg, Qdg, PVC      = b.Pdg, b.Qdg, b.PVC
+    BUS_SET, BRANCH_SET, DG_SET = c.BUS_SET, c.BRANCH_SET, c.DG_SET
+    HOUR_SET, QUARTER_SET       = c.HOUR_SET, c.QUARTER_SET
+    R = c.R
+
+    nvar = num_variables(model)
+    nbin = count(is_binary, all_variables(model))
+    ncon = num_constraints(model; count_variable_in_set_constraints = false)
+
+    secs = @elapsed optimize!(model)
+    status = termination_status(model)
+    status in (MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.ALMOST_LOCALLY_SOLVED) ||
+        error("LinDistFlow solve terminated with status $status")
+
+    # Losses are not in the model. This is the standard post-hoc estimate from the
+    # solved flows, reported so the field means something — it is not a model quantity.
+    Ploss = sum(R[(i,j)] * (value(Pbr[(i,j),h,m])^2 + value(Qbr[(i,j),h,m])^2) /
+                value(v[i,h,m])^2
+                for (i,j) in BRANCH_SET, h in HOUR_SET, m in QUARTER_SET)
+
+    log = [(iter = 1, seconds = secs, objective = objective_value(model),
+            residual = 0.0, status = string(status))]
+
+    return DOPFResult(
+        [value(v[i,h,m])   for i in BUS_SET, h in HOUR_SET, m in QUARTER_SET],
+        [value(v[d,h,m])   for d in DG_SET,  h in HOUR_SET, m in QUARTER_SET],
+        [value(Qdg[d,h,m]) for d in DG_SET,  h in HOUR_SET, m in QUARTER_SET],
+        [value(Pdg[d,h,m]) for d in DG_SET,  h in HOUR_SET, m in QUARTER_SET],
+        [value(PVC[d,h,m]) for d in DG_SET,  h in HOUR_SET, m in QUARTER_SET],
+        Ploss, log, nvar, nbin, ncon, true, secs)
 end
 
 """
