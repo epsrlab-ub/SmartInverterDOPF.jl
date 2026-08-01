@@ -340,6 +340,45 @@ identity is measured, and the loop repeats with a refreshed ``\circ`` point unti
 Checking against the true nonlinear relation is what makes the converged point a genuine
 power-flow solution rather than a solution of the approximation.
 
+### The other common host — LinDistFlow
+
+Most of the literature on droop-integrated DOPF uses **LinDistFlow** [2] instead, so it
+is worth seeing side by side. It is the branch-flow model with the loss terms dropped:
+for a radial feeder with small voltage deviations, keep the power balance and the voltage
+drop, discard ``|I|^2``, and everything becomes linear.
+
+```math
+\begin{aligned}
+p_j^{G} - p_j^{L} &= \sum_{k:(j,k)\in\mathcal{L}} P_{jk} \;-\; \sum_{i:(i,j)\in\mathcal{L}} P_{ij}\\
+q_j^{G} - q_j^{L} &= \sum_{k:(j,k)\in\mathcal{L}} Q_{jk} \;-\; \sum_{i:(i,j)\in\mathcal{L}} Q_{ij}\\
+v_j &= v_i + \Delta v_{ij}\\
+\Delta v_{ij} &= -\,\frac{R_{ij}P_{ij} + X_{ij}Q_{ij}}{V^{\mathrm{nom}}}
+\end{aligned}
+```
+
+Four equations, all linear, with the slack fixed at ``v_0 = V^{\mathrm{nom}}``. That is
+the entire network model.
+
+**What changes for the droop: nothing.** ``v_i`` is a decision variable in both hosts, so
+the droop block from any of the three methods drops in unchanged — which is the practical
+meaning of the modularity claimed above.
+
+**What changes for the solve** is worth knowing before you pick one:
+
+| | LinDistFlow | IVACOPF (used here) |
+|:--|:--|:--|
+| network model | approximate — losses dropped, radial, small deviations | exact AC, no approximation |
+| ``v_i`` | a variable, directly and linearly | needs the magnitude linearisation above |
+| losses | not represented | modelled as ``\lvert I\rvert^2 R`` |
+| solve | **one pass** | outer loop until the residual clears ``\epsilon`` |
+| with `:bigm` / `:lambda` | a single MILP | an MILP per pass |
+
+The trade is accuracy against effort. LinDistFlow with Big-M or Lambda is one MILP and no
+outer loop — fast, and why it is the usual choice in this literature [5], [6]. The price
+is that reported losses and voltages carry the linearisation error, which matters when
+curtailment is being measured rather than merely avoided. IVACOPF pays for exact power
+flow with an iteration whose convergence must itself be checked.
+
 ## The setup
 
 The IEEE 33-bus radial feeder, over a full day at 15-minute resolution — 96 time steps.
@@ -444,7 +483,6 @@ V^{\text{bp}}_{b+1}]``. In big-M form that is one two-sided inequality per segme
 writing all five out gives the complete window system:
 
 ```math
-\left.
 \begin{aligned}
 -(1-\delta_{1})M + V_i^{l}\;\; &\le v_i \le\;\; V^{\text{bp}}_{2} + (1-\delta_{1})M\\
 -(1-\delta_{2})M + V^{\text{bp}}_{2} &\le v_i \le\;\; V^{\text{bp}}_{3} + (1-\delta_{2})M\\
@@ -452,7 +490,6 @@ writing all five out gives the complete window system:
 -(1-\delta_{4})M + V^{\text{bp}}_{4} &\le v_i \le\;\; V^{\text{bp}}_{5} + (1-\delta_{4})M\\
 -(1-\delta_{5})M + V^{\text{bp}}_{5} &\le v_i \le\;\; V_i^{u} + (1-\delta_{5})M
 \end{aligned}
-\;\right\}
 ```
 
 Each row is vacuous when its ``\delta_b = 0`` and binding when ``\delta_b = 1``, so
@@ -514,7 +551,6 @@ Only segments 2 and 4 need this treatment, and for those the ``W_b`` bounds alre
 The complete constraint system for the Big-M droop is therefore:
 
 ```math
-\left.
 \begin{aligned}
 -(1-\delta_{1})M + V_i^{l}\;\; &\le v_i \le\; V^{\text{bp}}_{2} + (1-\delta_{1})M\\[2pt]
 -M(1-\delta_{2}) \;&\le\; v_i - W_{2} \;\le\; (1-\delta_{2})M\\
@@ -524,7 +560,6 @@ V^{\text{bp}}_{2}\,\delta_{2} \;&\le\; W_{2} \;\le\; V^{\text{bp}}_{3}\,\delta_{
 V^{\text{bp}}_{4}\,\delta_{4} \;&\le\; W_{4} \;\le\; V^{\text{bp}}_{5}\,\delta_{4}\\[2pt]
 -(1-\delta_{5})M + V^{\text{bp}}_{5} &\le v_i \le\; V_i^{u} + (1-\delta_{5})M
 \end{aligned}
-\;\right\}
 ```
 
 Read alongside the Step-2 system, the change is visible: rows 2 and 4 — the sloped
@@ -630,7 +665,6 @@ statement, imposed rather than hoped for. Introduce one binary ``z_b`` per segme
 five of them for six breakpoints — and write, in full:
 
 ```math
-\left.
 \begin{aligned}
 \lambda_1 &\le z_1\\
 \lambda_2 &\le z_1 + z_2\\
@@ -640,7 +674,6 @@ five of them for six breakpoints — and write, in full:
 \lambda_6 &\le z_5\\[2pt]
 \sum_{b=1}^{5} z_b &= 1, \qquad z_b \in \{0,1\}
 \end{aligned}
-\;\right\}
 ```
 
 Read it as: ``z_b = 1`` names the active segment; a weight ``\lambda_b`` is allowed to be
@@ -657,7 +690,6 @@ that is, a point on segment 3, the dead-band.
 Collecting everything, the complete Lambda droop model is:
 
 ```math
-\left.
 \begin{aligned}
 v_i &= \sum_{b=1}^{6}\lambda_b V^{\text{bp}}_b\\
 q_i^G &= \sum_{b=1}^{6}\lambda_b q^{\text{bp}}_b\\
@@ -665,7 +697,6 @@ q_i^G &= \sum_{b=1}^{6}\lambda_b q^{\text{bp}}_b\\
 \lambda_1 \le z_1, \quad \lambda_b &\le z_{b-1} + z_b \;\;(b=2,\dots,5), \quad \lambda_6 \le z_5\\
 \sum_{b=1}^{5} z_b &= 1, \qquad z_b \in \{0,1\}
 \end{aligned}
-\;\right\}
 ```
 
 Seven constraint rows and no constant to tune — compare that with the Big-M system above.
@@ -706,10 +737,11 @@ The Lambda form has a decisive practical advantage over Big-M once you stop trea
 curve as fixed. The breakpoint voltages ``V^{\text{bp}}_b`` appear *linearly* here. Make
 them decision variables — so the OPF chooses the curve as well as the dispatch — and the
 constraint ``v_i = \sum_b \lambda_b V^{\text{bp}}_b`` becomes bilinear in ``\lambda`` and
-``V^{\text{bp}}``: a single well-understood bilinear term, rather than the tangle Big-M
-produces when ``W_b = \delta_b v_i`` stops being a binary-times-continuous product. This
-is why work on optimised and adaptive droop curves is normally built on Lambda
-[8], [10].
+``V^{\text{bp}}``: a single well-understood bilinear term — routinely handled by a
+McCormick envelope, tightened by partitioning the breakpoint range if the relaxation is
+too loose — rather than the tangle Big-M produces when ``W_b = \delta_b v_i`` stops being
+a binary-times-continuous product. This is why work on optimised and adaptive droop
+curves is normally built on Lambda [8], [10].
 
 ## Method C — Heaviside
 
