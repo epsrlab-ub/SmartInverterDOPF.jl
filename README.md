@@ -32,12 +32,11 @@ extrema(res.V)              # voltage range across the feeder, p.u.
 ```
 
 > **Solver note.** The committed results are generated with **Gurobi**, which is
-> [free for academic use](https://www.gurobi.com/academia/academic-program-and-licenses/)
-> and fast on this model. We also tried the open-source MILP solvers HiGHS and GLPK;
-> neither worked out — one returned an infeasible status inside the
-> successive-linearisation loop, the other was too slow to finish. If no MILP licence is
-> available, the `:heaviside` encoding needs only Ipopt, which is open source, and
-> reaches the same answer.
+> [free for academic users](https://www.gurobi.com/academia/academic-program-and-licenses/).
+> We also tried the open-source MILP solvers HiGHS and GLPK; neither worked out — one
+> returned an infeasible status inside the successive-linearisation loop, the other was
+> too slow to finish. If no MILP licence is available, the `:heaviside` encoding needs
+> only Ipopt, which is open source, and reaches the same answer.
 
 ## The three encodings
 

@@ -57,17 +57,13 @@ Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
 You will also need a solver. `:bigm` and `:lambda` need an MILP solver; `:heaviside`
 needs an NLP solver such as [Ipopt](https://github.com/jump-dev/Ipopt.jl).
 
-!!! note "Use Gurobi — it is free for academics"
+!!! note "Use Gurobi"
     The results throughout this documentation were produced with **Gurobi**, which is
-    free for academic use through the
-    [Gurobi academic program](https://www.gurobi.com/academia/academic-program-and-licenses/)
-    (named-user, Web License Service and site licences, all free to students, faculty and
-    staff at accredited degree-granting institutions).
+    [free for academic users](https://www.gurobi.com/academia/academic-program-and-licenses/).
 
     We also tried the open-source MILP solvers HiGHS and GLPK on this model; neither
     worked out — one returned an infeasible status inside the successive-linearisation
-    loop, the other was too slow to finish. Gurobi is the recommendation: free for
-    academic users, and fast on this problem.
+    loop, the other was too slow to finish.
 
     The `:heaviside` encoding needs no MILP solver at all — only Ipopt, which is open
     source — and reaches the same answer.

@@ -1,6 +1,6 @@
 # Embedding the Volt-VAr droop into a distribution OPF
 
-*Rahmat Emami Mirak*
+*Rahmat Emami Mirak — supervised by Dr. Adedoyin Inaolaji*
 
 A smart inverter does not accept a reactive-power set-point. It follows a Volt-VAr
 curve: it measures its own terminal voltage and decides, on its own, how much reactive
@@ -89,25 +89,14 @@ Pkg.add(["JuMP", "Gurobi", "Ipopt"])
 Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
 ```
 
-!!! note "Solvers used here — and why Gurobi"
+!!! note "Solvers used here"
     Everything on this page was produced with **Gurobi** for the two mixed-integer
-    encodings and **Ipopt** for the nonlinear one.
-
-    Gurobi is commercial software, but it is **free for academic use**. The
-    [Gurobi academic program](https://www.gurobi.com/academia/academic-program-and-licenses/)
-    offers a *Named-User License* (runs locally, no constant internet connection), a
-    *Web License Service (WLS)* licence usable from any internet-connected machine
-    including containers and cloud runners, and a *Site License* for a department or
-    whole university. All are free to students, faculty and staff at accredited
-    degree-granting institutions for non-commercial teaching and research, renewable
-    while eligibility holds, and recent graduates can keep access through the
-    "Take Gurobi with You" programme.
+    encodings and **Ipopt** for the nonlinear one. Gurobi is commercial, but
+    [free for academic users](https://www.gurobi.com/academia/academic-program-and-licenses/).
 
     We also tried the open-source MILP solvers **HiGHS** and **GLPK** on this model.
     Neither worked out — one returned an infeasible status inside the
-    successive-linearisation loop, the other was too slow to finish. So the
-    recommendation here is simply to use Gurobi: it is free for academic users and
-    comfortably fast on this problem.
+    successive-linearisation loop, the other was too slow to finish. Use Gurobi.
 
     If no MILP licence is available at all, the `:heaviside` encoding needs **only
     Ipopt**, which is open source, and reaches the same answer — a practical reason to
@@ -309,16 +298,40 @@ v_i \;\le\; V^{\text{bp}}_{b+1} + M\,(1-\delta_{b})
 Vacuous when ``\delta_b = 0``, binding when ``\delta_b = 1``. Together with step 1, the
 solver is forced to pick the segment that genuinely contains ``v_i``.
 
-**Step 3: the awkward part — the sloped segments.** On segments 2 and 4 the reactive
-output depends on ``v_i``, so the contribution of segment ``b`` to ``q_i^G`` is
-proportional to ``\delta_b v_i``: a binary times a continuous variable. That product is
-**bilinear**, and a bilinear term is exactly what disqualifies a model from being a
-linear program.
+**Step 3: assemble the droop law — and watch it turn nonlinear.** With the switches in
+place, ``q_i^G`` is just the sum of the five segment laws, each weighted by its own
+binary. Segments 1, 3 and 5 contribute constants (``\bar q_i``, ``0``, ``-\bar q_i``);
+the two sloped segments contribute their affine laws, written in slope–intercept form:
 
-The saving grace is that ``\delta_b`` is binary rather than merely continuous, and
-``v_i`` is bounded. Under those two conditions the product can be replaced by a new
-continuous variable ``W_b := \delta_b v_i`` and four linear inequalities, with **no
-approximation whatsoever**:
+```math
+q_i^G \;=\; \delta_1\,\bar q_i
+\;+\; \delta_2\!\left(\alpha_1 v_i + \frac{\bar q_i V^{\text{bp}}_3}{V^{\text{bp}}_3 - V^{\text{bp}}_2}\right)
+\;+\; \delta_3\cdot 0
+\;+\; \delta_4\!\left(\alpha_2 v_i + \frac{\bar q_i V^{\text{bp}}_4}{V^{\text{bp}}_5 - V^{\text{bp}}_4}\right)
+\;+\; \delta_5\left(-\bar q_i\right)
+```
+
+with slopes ``\alpha_1 = -\bar q_i/(V^{\text{bp}}_3-V^{\text{bp}}_2)`` and
+``\alpha_2 = -\bar q_i/(V^{\text{bp}}_5-V^{\text{bp}}_4)``.
+
+This is a correct statement of the curve: exactly one ``\delta_b`` equals 1, so exactly
+one bracket survives and ``q_i^G`` takes that segment's value. But it is **not linear**.
+Multiply the two sloped brackets out and the offending terms appear:
+
+```math
+\underbrace{\delta_2\,\alpha_1 v_i}_{\text{bilinear}} \qquad\text{and}\qquad
+\underbrace{\delta_4\,\alpha_2 v_i}_{\text{bilinear}}
+```
+
+Each is a **product of two decision variables** — one binary, one continuous. Everything
+else in the expression is a variable times a constant. So the whole difficulty of the
+Big-M formulation reduces to these two products, and if they can be removed the model
+becomes a plain MILP.
+
+**Step 4: remove the two products, exactly.** The saving grace is that ``\delta_b`` is
+binary rather than merely continuous, and ``v_i`` is bounded. Under those two conditions
+each product can be replaced by a new continuous variable ``W_b := \delta_b v_i`` and
+four linear inequalities, with **no approximation whatsoever**:
 
 ```math
 -M(1-\delta_b) \;\le\; v_i - W_b \;\le\; M(1-\delta_b), \qquad
@@ -335,18 +348,20 @@ A small bonus: for the sloped segments the right-hand pair already pins ``v_i`` 
 segment whenever ``\delta_b = 1``, so the step-2 window constraints are redundant there
 and only segments 1, 3 and 5 need them.
 
-With every product replaced, the droop law becomes a single linear equation in which
-every coefficient is a constant:
+Now substitute ``\delta_2 v_i \to W_2`` and ``\delta_4 v_i \to W_4`` in the Step 3
+expression. Nothing else changes, and the droop law becomes a single **linear** equation
+in which every coefficient is a constant:
 
 ```math
 q_i^G = \delta_1\bar q_i
       + \alpha_1 W_2 + \delta_2\frac{\bar q_i V^{\text{bp}}_3}{V^{\text{bp}}_3 - V^{\text{bp}}_2}
       + \alpha_2 W_4 + \delta_4\frac{\bar q_i V^{\text{bp}}_4}{V^{\text{bp}}_5 - V^{\text{bp}}_4}
-      - \delta_5\bar q_i ,
+      - \delta_5\bar q_i
 ```
 
-with slopes ``\alpha_1 = -\bar q_i/(V^{\text{bp}}_3-V^{\text{bp}}_2)`` and
-``\alpha_2 = -\bar q_i/(V^{\text{bp}}_5-V^{\text{bp}}_4)``.
+Compare it with the Step 3 version: the two bracketed sloped terms have simply been split
+into a ``W`` term and a ``\delta`` term. That substitution is the entire content of the
+Big-M droop model.
 
 In JuMP:
 
