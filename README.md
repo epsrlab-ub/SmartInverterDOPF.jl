@@ -95,6 +95,8 @@ nonlinear power-flow identity.
 src/          the package: case data, droop encodings, DOPF
 data/         IEEE 33-bus feeder, load profiles, solar profile (JSON)
 scripts/      generate_results.jl — regenerates the precomputed documentation results
+examples/     three_phase/ — LinDist3Flow on a real unbalanced LV feeder,
+              one standalone script per encoding
 docs/         Documenter site; builds without any solver
 test/         test suite
 ```
@@ -109,7 +111,19 @@ recompute them:
 julia --project=scripts scripts/generate_results.jl
 ```
 
-## Building the documentation locally
+and, for the three-phase section:
+
+```bash
+julia --project=examples/three_phase examples/three_phase/generate_results.jl
+```
+
+## Three-phase example
+
+[`examples/three_phase/`](examples/three_phase) applies the same three encodings to a
+real unbalanced low-voltage feeder — 194 buses, 18 single-phase loads split 4/5/9 across
+phases, 12 smart inverters in four size classes — on a **LinDist3Flow** host. One
+standalone script per encoding, sharing their skeleton verbatim. The feeder is CC BY 4.0;
+attribution is in that directory's README.
 
 ```bash
 julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'

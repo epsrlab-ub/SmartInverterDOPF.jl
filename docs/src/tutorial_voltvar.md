@@ -75,6 +75,108 @@ base_case_sentence() = md(
     "$(fmt(case.Vmin_limit, 2)) p.u.")
 
 Vbp, qshape = collect(Float64, case.Vbp), collect(Float64, case.qshape)
+
+# ---- three-phase section: LinDist3Flow on a real unbalanced LV feeder -----------------
+TPR  = joinpath(RES, "threephase")
+tpc  = JSON3.read(read(joinpath(TPR, "case.json"), String))
+tpr  = Dict(m => JSON3.read(read(joinpath(TPR, "$m.json"), String))
+            for m in ("bigm", "lambda", "heaviside"))
+
+tp_case_table() = md(
+    "| | |",
+    "|:--|:--|",
+    "| feeder | `$(tpc.name)`, Kron-reduced to three wires |",
+    "| size | $(tpc.n_bus) buses, $(tpc.n_line) lines, $(fmt(tpc.length_m, 0)) m, " *
+        "$(fmt(tpc.Vbase_V, 0)) V phase-to-neutral |",
+    "| loads | $(tpc.n_load) single-phase, split " *
+        "**$(join(tpc.loads_per_phase, " / "))** across phases, " *
+        "$(fmt(tpc.load_kW_total, 1)) kW total |",
+    "| inverters | $(length(tpc.sites)) in $(length(tpc.classes)) classes, " *
+        "$(fmt(tpc.PV_kW_total, 0)) kW " *
+        "($(fmt(100 * tpc.PV_kW_total / tpc.load_kW_total, 0)) % of peak load) |",
+    "| horizon | $(tpc.n_steps) steps — 24 h at 15-minute resolution |",
+    "| host | LinDist3Flow, phase-coupled linear branch flow |")
+
+tp_class_table() = md(
+    "| class | ``P`` rated | ``S_{\\max}`` | ``\\bar q`` (p.u.) | sites | buses |",
+    "|:--|--:|--:|--:|--:|:--|",
+    join([let c = tpc.classes[k]
+              bs = [s for s in tpc.sites if s.class_idx == k]
+              "| $(c.name) | $(fmt(c.P_kW, 0)) kW | $(fmt(c.S_kVA, 2)) kVA | " *
+              "$(fmt(c.qbar_pu, 4)) | $(length(bs)) | " *
+              join(["$(s.bus) (φ$(s.phase))" for s in bs], ", ") * " |"
+          end for k in eachindex(tpc.classes)], "\n"))
+
+tp_compare_table() = md(
+    "| encoding | class | solver | variables | binaries | constraints | solve (s) | " *
+    "curtailed (kWh) | curtailed (%) | voltage range (p.u.) | max ``\\lvert q^G - q(v)\\rvert`` |",
+    "|:--|:--|:--|--:|--:|--:|--:|--:|--:|:--|--:|",
+    join(map(ORDER) do m
+        r = tpr[m]
+        "| $(r.method) | $(r.model_class) | `$(r.solver)` | $(r.nvar) | $(r.nbin) | " *
+        "$(r.ncon) | $(fmt(r.solve_seconds, 1)) | $(fmt(r.E_curt_kWh, 2)) | " *
+        "$(fmt(r.curt_percent, 3)) | $(fmt(r.Vmin, 4)) – $(fmt(r.Vmax, 4)) | " *
+        "$(sci(r.max_droop_deviation)) |"
+    end, "\n"))
+
+tp_audit_table() = md(
+    "| quantity | value |",
+    "|:--|--:|",
+    "| model voltage range | $(fmt(tpr["lambda"].Vmin, 4)) – $(fmt(tpr["lambda"].Vmax, 4)) p.u. |",
+    "| **exact AC** voltage range | $(fmt(tpr["lambda"].audit.true_Vmin, 4)) – " *
+        "$(fmt(tpr["lambda"].audit.true_Vmax, 4)) p.u. |",
+    "| max ``\\lvert v_{\\text{model}} - v_{\\text{true}}\\rvert`` | " *
+        "$(sci(tpr["lambda"].audit.v_gap)) p.u. |",
+    "| droop residual at the model's own ``v`` | $(sci(tpr["lambda"].max_droop_deviation)) p.u. |",
+    "| droop residual at the **true** ``v`` | $(sci(tpr["lambda"].audit.droop_residual_true_v)) p.u. |",
+    "| bus-steps outside ``[$(fmt(tpc.Vmin_limit,2)), $(fmt(tpc.Vmax_limit,2))]`` in reality | " *
+        "**$(tpr["lambda"].audit.n_limit_violations)** of $(tpc.n_bus * 3 * tpc.n_steps) |")
+
+tp_load_sentence() = md(
+    join(["$(fmt(tpc.load_kW_per_phase[φ], 1)) kW on phase $φ" for φ in 1:3], ", ") * " —")
+
+const TPCOL = [:seagreen, :orangered, :dodgerblue, :mediumorchid]
+
+function tp_droop_figure(m = "lambda")
+    r    = tpr[m]
+    qmax = maximum(c.qbar_pu for c in tpc.classes)
+    p = plot(size = (860, 620), grid = false, framestyle = :axes,
+             title = "Three-phase dispatch vs. the droop — $(r.method)", titlefontsize = 11,
+             xlabel = "voltage at the inverter terminal (p.u.)", ylabel = "VAr output (p.u.)",
+             xlims = (Vbp[1], Vbp[6]), ylims = (-1.15qmax, 1.15qmax),
+             xticks = 0.90:0.05:1.10, legend = :outertop, legend_columns = 4,
+             legendfontsize = 8, foreground_color_legend = :black,
+             background_color_legend = :white, left_margin = 4Plots.mm)
+    vspan!(p, [tpc.Vmin_limit, tpc.Vmax_limit], color = :lightblue, alpha = 0.30,
+           lw = 0, label = false)
+    hline!(p, [0.0], ls = :dash, lw = 1.2, color = :gray65, label = false)
+    for k in eachindex(tpc.classes)
+        qb  = tpc.classes[k].qbar_pu
+        idx = [i for i in eachindex(tpc.sites) if tpc.sites[i].class_idx == k]
+        plot!(p, Vbp, qshape .* qb, lw = 2.5, color = TPCOL[k], label = false)
+        scatter!(p, vcat([collect(Float64, r.Vdg_series[i]) for i in idx]...),
+                 vcat([collect(Float64, r.Qdg_series[i]) for i in idx]...),
+                 m = :+, ms = 5, msw = 2, mc = TPCOL[k], msc = TPCOL[k], label = false)
+        plot!(p, [1.5, 1.6], [0.0, 0.0], lw = 2, color = TPCOL[k], m = :circle, ms = 4,
+              mc = TPCOL[k], msc = TPCOL[k], label = tpc.classes[k].name)
+    end
+    p
+end
+
+function tp_envelope_figure(m = "lambda")
+    r = tpr[m]
+    p = plot(xlabel = "hour of day", ylabel = "voltage (p.u.)", xticks = 0:3:24,
+             xlims = (0, 24), legend = :topright,
+             title = "Voltage envelope by phase — the three phases do not coincide")
+    for (φ, c) in zip(1:3, (:seagreen, :orangered, :dodgerblue))
+        plot!(p, hours, collect(Float64, r.Vmax_t[φ]), lw = 2, color = c, label = "phase $φ max")
+        plot!(p, hours, collect(Float64, r.Vmin_t[φ]), lw = 2, ls = :dash, color = c,
+              label = "phase $φ min")
+    end
+    hline!(p, [tpc.Vmin_limit, tpc.Vmax_limit], ls = :dot, lw = 1.5, color = :red,
+           label = "limits")
+    p
+end
 ```
 
 ## Prerequisites
@@ -1184,6 +1286,125 @@ scheduled the feeder knowing exactly what it will do. The bottom panel shows thi
 delivering all the active power available to it — the reactive support is enough here, so
 nothing is curtailed at bus 18.
 
+## Three phases
+
+Everything so far has been single-phase. Real distribution feeders are not: loads connect
+between one phase and neutral, so the phases carry different currents, sit at different
+voltages, and an inverter on phase 1 sees a different terminal voltage from its neighbour
+on phase 2. A single-phase model cannot represent that, and on a low-voltage feeder with
+single-phase rooftop PV it is exactly what matters.
+
+None of the three encodings needs to change. They ask the host for one thing — a voltage
+variable at the inverter's own terminal — and it makes no difference whether that terminal
+is identified by a bus or by a bus *and a phase*. What changes is the network model.
+
+### LinDist3Flow
+
+The three-phase host used here is **LinDist3Flow**, the multiphase form of the same
+linearisation [[3]](#ref-3) introduced earlier, from Gan and Low
+[[12]](#ref-12). It is used for the three-phase case rather than IVACOPF because it keeps
+the model linear, so Big-M and Lambda stay MILPs solved once, exactly as in the
+single-phase LinDistFlow case.
+
+Each line now carries a 3×3 phase impedance ``Z`` rather than a scalar, and the phases
+couple. Starting from ``\lvert V_j\rvert^2 = \lvert V_i - Z I\rvert^2``, dropping the
+quadratic term and assuming voltages stay near-balanced gives, per phase ``\varphi``:
+
+```math
+w_j^{\varphi} = w_i^{\varphi} - \sum_{\psi} \Big( a^R_{\varphi\psi} P_{ij}^{\psi}
+                                               + a^X_{\varphi\psi} Q_{ij}^{\psi} \Big)
+```
+
+with, writing ``\alpha = e^{-j2\pi/3}`` for the 120° rotation,
+
+```math
+a^R_{\varphi\psi} = 2\,\mathrm{Re}\!\left(\alpha^{\psi-\varphi} Z_{\varphi\psi}\right),
+\qquad
+a^X_{\varphi\psi} = 2\,\mathrm{Im}\!\left(\alpha^{\psi-\varphi} Z_{\varphi\psi}\right)
+```
+
+The ``\pm\sqrt{3}`` cross-terms that appear in the published form of these matrices are
+just that rotation written out. Two checks are worth carrying: for a single phase
+``\alpha^0 = 1`` gives ``a^R = 2r`` and ``a^X = 2x``, recovering
+``w_j = w_i - 2(rP + xQ)``; and for diagonal ``Z`` the matrices are diagonal and the
+phases decouple into three independent LinDistFlows.
+
+The implementation works in magnitude rather than squared magnitude — near nominal,
+``w_j - w_i \approx 2(v_j - v_i)`` — so the droop breakpoints stay in ordinary p.u.
+voltage and the droop block is copied across untouched.
+
+### The case
+
+```@example tut
+tp_case_table()   # hide
+```
+
+A real Electricity North West low-voltage feeder, Kron-reduced to three wires, with
+**twelve smart inverters in four size classes**. Because ``\bar q = S_{\max}``, the four
+classes follow four *different* droop curves — same breakpoints, four saturation levels.
+Each phase carries one inverter of each class, with the class order rotated by phase so
+that size is confounded with neither phase nor distance from the substation.
+
+```@example tut
+tp_class_table()   # hide
+```
+
+### The three encodings still agree
+
+Same feeder, same inverters, same objective; only the droop block changes.
+
+```@example tut
+tp_compare_table()   # hide
+```
+
+Identical curtailed energy, identical voltage range, and every dispatch point on the
+curve of its own class. The encodings behave exactly as they did single-phase: two
+mixed-integer formulations and one integer-free one, agreeing to solver tolerance, with
+Heaviside paying for its lack of binaries in solve time.
+
+```@example tut
+tp_droop_figure()   # hide
+```
+
+The four curves are drawn in absolute p.u. VArs. Normalising by ``\bar q`` would collapse
+them onto one line and hide what the figure is for: each class has its own reactive
+authority, and a dispatch point is only correct if it lies on the curve belonging to
+*its own inverter*.
+
+### The phases genuinely diverge
+
+```@example tut
+tp_envelope_figure()   # hide
+```
+
+This is what the single-phase model cannot show. The three phases carry different load —
+```@example tut
+tp_load_sentence()   # hide
+```
+— so they sit at different voltages all day and their inverters respond differently. A
+balanced equivalent would average this away and report a feeder that looks comfortable
+while one phase is doing considerably more work than the others.
+
+### How accurate is it?
+
+The same audit applied to the single-phase hosts: take the optimised dispatch, solve the
+**exact** three-phase AC power flow for those injections, and compare.
+
+```@example tut
+tp_audit_table()   # hide
+```
+
+Better than LinDistFlow managed on the 33-bus feeder — the voltages track the exact
+solution closely and nothing violates a limit in reality. But the droop is steep, roughly
+``\bar q`` per 0.02 p.u. on its sloped segments, so even a small voltage error leaves the
+inverters measurably off their curves. The dispatch is close to realisable rather than
+exactly realisable, which is the same lesson as before: **the encodings are exact within
+the model, and the host decides how much the model resembles the world.**
+
+The code is in
+[`examples/three_phase/`](https://github.com/ra-emami/SmartInverterDOPF.jl/tree/main/examples/three_phase),
+one standalone script per encoding, sharing their skeleton verbatim.
+
 ## Reproducing these results
 
 The figures and tables on this page are drawn from results committed to the repository,
@@ -1191,6 +1412,12 @@ so building the documentation needs no solver. To regenerate them:
 
 ```bash
 julia --project=scripts scripts/generate_results.jl
+```
+
+and, for the three-phase section:
+
+```bash
+julia --project=examples/three_phase examples/three_phase/generate_results.jl
 ```
 
 That runs all three methods with Gurobi and Ipopt and rewrites
@@ -1329,3 +1556,14 @@ optimised, not merely respected
     2027, Art. no. 113613.
     [doi:10.1016/j.epsr.2026.113613](https://doi.org/10.1016/j.epsr.2026.113613)
     — Lambda / SOS2 with the breakpoints promoted to decision variables
+
+**Three-phase network model**
+
+```@raw html
+<a id="ref-12"></a>
+```
+**[12]** L. Gan and S. H. Low, "Convex relaxations and linear approximation for optimal
+power flow in multiphase radial networks," *2014 Power Systems Computation Conference
+(PSCC)*, pp. 1–9, 2014.
+[doi:10.1109/PSCC.2014.7038399](https://doi.org/10.1109/PSCC.2014.7038399)
+— **LinDist3Flow**, the multiphase linearisation used for the three-phase case

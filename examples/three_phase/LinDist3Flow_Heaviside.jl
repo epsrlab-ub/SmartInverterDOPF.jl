@@ -1,0 +1,446 @@
+# =====================================================================================
+#  Three-phase Volt-VAr droop in a distribution OPF
+#  HOST   : LinDist3Flow  — the three-phase (multiphase) LinDistFlow linearisation
+#  DROOP  : Heaviside      — segment masks from unit steps, no integers at all
+#
+#  Test system : network_5_Feeder_2, a real 415/240 V LV feeder from the ENWL dataset,
+#                Kron-reduced to three wires. 194 buses, 193 lines, 489 m, and 18
+#                single-phase loads spread 4 / 5 / 9 across phases 1 / 2 / 3 — so the
+#                network is genuinely unbalanced, which is the point of modelling it
+#                three-phase at all.
+#  Horizon     : 24 h at 15-minute resolution (96 steps), residential load shape,
+#                clear-sky irradiance.
+#  Objective   : minimise total PV curtailment over the day.
+#
+#  This is the three-phase counterpart of the single-phase 33-bus / LinDistFlow / Lambda
+#  case. The droop block is unchanged from the single-phase version — it only ever needs
+#  a voltage variable per inverter — so everything new here is in the network model.
+#
+#  Run:   julia --project=. LinDist3Flow_Heaviside.jl
+# =====================================================================================
+
+using JuMP, Ipopt                     # NLP solver — this encoding needs no integers
+using JSON3, Printf, Plots
+
+const PHASES = 1:3
+const DATA   = joinpath(@__DIR__, "data")
+
+# ─────────────────────────────────────────────── configuration you may want to change ──
+const N_PV_PER_PHASE = 4         # PV sites per phase, placed at the electrically farthest load buses
+# Four inverter classes. Each phase receives one of each, so size is not confounded with
+# phase or with distance from the substation. Because q̄ = S_max, the four classes follow
+# four *different* droop curves — same breakpoint voltages, four saturation levels.
+const PV_CLASSES = (("A — 3 kW",  3.0),
+                    ("B — 5 kW",  5.0),
+                    ("C — 8 kW",  8.0),
+                    ("D — 12 kW", 12.0))
+const S_OVER_P       = 1.1       # inverter oversizing: S_max = 1.1 * P_rated
+const VLIM           = (0.95, 1.05)              # bus voltage limits, p.u.
+const VBP            = [0.88, 0.90, 0.97, 1.00, 1.02, 1.10]   # IEEE 1547 breakpoints, p.u.
+const QSHAPE         = [1.0, 1.0, 0.0, 0.0, -1.0, -1.0]       # q / q̄ at each breakpoint
+const SBASE_KVA      = 100.0     # per-phase power base
+const MIP_GAP        = 1e-3
+const METHOD         = "Heaviside"   # droop encoding, for labels
+const FIGSUF         = "_heaviside"                # suffix on the figure filenames
+# ───────────────────────────────────────────────────────────────────────────────────────
+
+# ============================================================== 1) read the BMOPF case ==
+const CASE = "network_5_Feeder_2"
+net    = JSON3.read(read(joinpath(DATA, "$CASE.bmopf.json"), String))
+loadpr = JSON3.read(read(joinpath(DATA, "load_profile_residential_15min.json"), String))
+solar  = JSON3.read(read(joinpath(DATA, "solar_profile.json"), String))
+
+BUSES  = [String(k) for k in keys(net.bus)]
+bus_id = Dict(b => i for (i, b) in enumerate(BUSES))
+nb     = length(BUSES)
+
+SLACK      = String(net.voltage_source.source.bus)
+VBASE      = Float64(net.voltage_source.source.v_magnitude[1])   # phase-to-neutral, V
+SBASE      = SBASE_KVA * 1e3                                     # VA, per phase
+ZBASE      = VBASE^2 / SBASE
+const VNOM = 1.0
+
+T      = 96
+Pmult  = collect(Float64, loadpr.P_percent) ./ 100
+Qmult  = collect(Float64, loadpr.Q_percent) ./ 100
+G      = collect(Float64, solar.G_percent)  ./ 100
+
+# ---- lines: (from, to) and their 3×3 series impedance in p.u. -------------------------
+struct Branch
+    from::String
+    to::String
+    Z::Matrix{ComplexF64}     # 3×3, per unit
+end
+
+function linecode_Z(lc, len_m)
+    Z = zeros(ComplexF64, 3, 3)
+    for p in PHASES, q in PHASES
+        r = Float64(lc[Symbol("R_series_$(p)_$(q)")])      # Ω per metre
+        x = Float64(lc[Symbol("X_series_$(p)_$(q)")])
+        Z[p, q] = complex(r, x) * len_m / ZBASE
+    end
+    return Z
+end
+
+BR = Branch[]
+for (_, l) in pairs(net.line)
+    lc = net.linecode[Symbol(l.linecode)]
+    push!(BR, Branch(String(l.bus_from), String(l.bus_to), linecode_Z(lc, Float64(l.length))))
+end
+nbr = length(BR)
+
+# ---- loads: single-phase, phase-to-neutral, in p.u. -----------------------------------
+# Pload[bus, phase] is the peak; the residential shape scales it over the day.
+Pload_pk = zeros(nb, 3)
+Qload_pk = zeros(nb, 3)
+for (_, ld) in pairs(net.load)
+    b = bus_id[String(ld.bus)]
+    φ = parse(Int, String(ld.terminal_map[1]))           # ("1","n") → phase 1
+    Pload_pk[b, φ] += Float64(ld.p_nom[1]) / SBASE
+    Qload_pk[b, φ] += Float64(ld.q_nom[1]) / SBASE
+end
+
+# =============================================== 2) LinDist3Flow voltage-drop matrices ==
+#  For a line with 3×3 phase impedance Z, and voltages that are near-balanced (the
+#  standing assumption of every LinDistFlow variant), the drop in *squared* magnitude is
+#
+#       w_j = w_i − ( aR · P_ij + aX · Q_ij )
+#
+#  where, with the rotation operator α = e^{−j2π/3},
+#
+#       aR[φ,ψ] =  2·Re( α^{φ−ψ} · conj(Z[φ,ψ]) )
+#       aX[φ,ψ] = −2·Im( α^{φ−ψ} · conj(Z[φ,ψ]) )
+#
+#  The ±√3 cross terms that appear in the published form of these matrices are just this
+#  rotation written out. Two checks worth keeping in mind:
+#    · single phase (α^0 = 1): aR = 2r, aX = 2x, recovering w_j = w_i − 2(rP + xQ);
+#    · Z diagonal: aR, aX are diagonal and the phases decouple into three LinDistFlows.
+#
+#  We then work in magnitude rather than squared magnitude, exactly as the single-phase
+#  code does: w = v² and v ≈ 1 give w_j − w_i ≈ 2·VNOM·(v_j − v_i), hence the 2·VNOM
+#  divisor below. Reference: Gan & Low, "Convex relaxations and linear approximation for
+#  OPF in multiphase radial networks", PSCC 2014 (doi:10.1109/PSCC.2014.7038399).
+const ALPHA = exp(-2π * im / 3)
+
+function drop_matrices(Z::Matrix{ComplexF64})
+    aR = zeros(3, 3)
+    aX = zeros(3, 3)
+    for p in PHASES, q in PHASES
+        c = ALPHA^(p - q) * conj(Z[p, q])
+        aR[p, q] =  2 * real(c)
+        aX[p, q] = -2 * imag(c)
+    end
+    return aR ./ (2 * VNOM), aX ./ (2 * VNOM)
+end
+
+AR = [drop_matrices(b.Z)[1] for b in BR]
+AX = [drop_matrices(b.Z)[2] for b in BR]
+
+# ============================================================ 3) place the PV inverters ==
+# Farthest load buses on each phase, by |Z| along the path from the source.
+function distance_from_slack()
+    adj = Dict(b => Tuple{String,Int}[] for b in BUSES)
+    for (k, br) in enumerate(BR)
+        push!(adj[br.from], (br.to, k))
+        push!(adj[br.to],   (br.from, k))
+    end
+    dist   = Dict(SLACK => 0.0)
+    parent = Dict{String,Tuple{String,Int}}()
+    order  = [SLACK]
+    queue  = [SLACK]
+    while !isempty(queue)
+        b = popfirst!(queue)
+        for (nbb, k) in adj[b]
+            if !haskey(dist, nbb)
+                dist[nbb]   = dist[b] + abs(BR[k].Z[1, 1])
+                parent[nbb] = (b, k)
+                push!(order, nbb); push!(queue, nbb)
+            end
+        end
+    end
+    return dist, parent, order
+end
+DIST, PARENT, ORDER = distance_from_slack()
+
+PV = NamedTuple{(:bus, :phase, :cls, :Pmax, :Smax),Tuple{Int,Int,Int,Float64,Float64}}[]
+for φ in PHASES
+    cand = [b for b in 1:nb if Pload_pk[b, φ] > 0]
+    sort!(cand, by = b -> -DIST[BUSES[b]])
+    for (rank, b) in enumerate(cand[1:min(N_PV_PER_PHASE, length(cand))])
+        # rotate the class order by phase, so the farthest site is not always the same size
+        ci = mod(rank - 1 + (φ - 1), length(PV_CLASSES)) + 1
+        p  = PV_CLASSES[ci][2] * 1e3 / SBASE
+        push!(PV, (bus = b, phase = φ, cls = ci, Pmax = p, Smax = S_OVER_P * p))
+    end
+end
+npv = length(PV)
+ncls = length(PV_CLASSES)
+
+# irradiance ceiling per inverter per step
+Pavail = [PV[i].Pmax * G[t] for i in 1:npv, t in 1:T]
+
+@printf("network : %d buses, %d lines, %d single-phase loads\n", nb, nbr, length(net.load))
+@printf("bases   : V = %.2f V (phase-neutral), S = %.0f kVA/phase, Z = %.4f Ω\n",
+        VBASE, SBASE_KVA, ZBASE)
+@printf("load    : %.2f kW peak total\n", sum(Pload_pk) * SBASE / 1e3)
+totkW = sum(g.Pmax for g in PV) * SBASE / 1e3
+@printf("PV      : %d smart inverters in %d classes, %.1f kW total (%.0f%% of peak load)\n",
+        npv, ncls, totkW, 100 * totkW / (sum(Pload_pk) * SBASE / 1e3))
+
+println("\ninverter classes")
+println("  class        P_rated   S_max    q̄ = S_max    q̄ (p.u.)   sites")
+for ci in 1:ncls
+    n = count(g -> g.cls == ci, PV)
+    s = S_OVER_P * PV_CLASSES[ci][2]
+    @printf("  %-11s  %5.1f kW  %5.2f kVA  %6.2f kvar    %.4f      %d\n",
+            PV_CLASSES[ci][1], PV_CLASSES[ci][2], s, s, s * 1e3 / SBASE, n)
+end
+
+println("\nsmart-inverter sites ($(N_PV_PER_PHASE) electrically farthest load buses per phase)")
+println("  bus   phase   class        |Z| from source   local load   P_rated    q̄")
+println("                                    (Ω)           (kW)       (kW)    (kvar)")
+for g in sort(PV, by = g -> (g.phase, -DIST[BUSES[g.bus]]))
+    @printf("  %-5s   %d     %-11s   %8.4f        %6.2f     %6.1f   %6.2f\n",
+            BUSES[g.bus], g.phase, PV_CLASSES[g.cls][1], DIST[BUSES[g.bus]] * ZBASE,
+            Pload_pk[g.bus, g.phase] * SBASE / 1e3,
+            g.Pmax * SBASE / 1e3, g.Smax * SBASE / 1e3)
+end
+
+# ================================================================= 4) build and solve ===
+model = Model(Ipopt.Optimizer)
+set_optimizer_attribute(model, "max_iter", 3000)
+set_optimizer_attribute(model, "print_level", 0)
+
+@variable(model, VLIM[1] <= v[1:nb, PHASES, 1:T] <= VLIM[2], start = VNOM)
+@variable(model, P[1:nbr, PHASES, 1:T])
+@variable(model, Q[1:nbr, PHASES, 1:T])
+@variable(model, Pg[PHASES, 1:T])
+@variable(model, Qg[PHASES, 1:T])
+@variable(model, 0 <= Pdg[1:npv, 1:T])
+@variable(model, Qdg[1:npv, 1:T])
+@variable(model, 0 <= PVC[1:npv, 1:T])
+
+islack = bus_id[SLACK]
+@constraint(model, [φ in PHASES, t in 1:T], v[islack, φ, t] == VNOM)
+
+# ---- LinDist3Flow voltage drop --------------------------------------------------------
+@constraint(model, [k in 1:nbr, φ in PHASES, t in 1:T],
+    v[bus_id[BR[k].to], φ, t] == v[bus_id[BR[k].from], φ, t]
+        - sum(AR[k][φ, ψ] * P[k, ψ, t] + AX[k][φ, ψ] * Q[k, ψ, t] for ψ in PHASES))
+
+# ---- power balance per bus and phase (losses neglected — that is the linearisation) ---
+out_br = [Int[] for _ in 1:nb]
+in_br  = [Int[] for _ in 1:nb]
+for (k, br) in enumerate(BR)
+    push!(out_br[bus_id[br.from]], k)
+    push!(in_br[bus_id[br.to]], k)
+end
+pv_at = [Int[] for _ in 1:nb, _ in 1:3]
+for (i, g) in enumerate(PV); push!(pv_at[g.bus, g.phase], i); end
+
+@expression(model, netP[b = 1:nb, φ = PHASES, t = 1:T],
+    (b == islack ? Pg[φ, t] : zero(AffExpr))
+    + sum(Pdg[i, t] for i in pv_at[b, φ]; init = zero(AffExpr))
+    - Pload_pk[b, φ] * Pmult[t])
+@expression(model, netQ[b = 1:nb, φ = PHASES, t = 1:T],
+    (b == islack ? Qg[φ, t] : zero(AffExpr))
+    + sum(Qdg[i, t] for i in pv_at[b, φ]; init = zero(AffExpr))
+    - Qload_pk[b, φ] * Qmult[t])
+
+@constraint(model, [b in 1:nb, φ in PHASES, t in 1:T],
+    netP[b, φ, t] == sum(P[k, φ, t] for k in out_br[b]; init = zero(AffExpr))
+                   - sum(P[k, φ, t] for k in in_br[b];  init = zero(AffExpr)))
+@constraint(model, [b in 1:nb, φ in PHASES, t in 1:T],
+    netQ[b, φ, t] == sum(Q[k, φ, t] for k in out_br[b]; init = zero(AffExpr))
+                   - sum(Q[k, φ, t] for k in in_br[b];  init = zero(AffExpr)))
+
+# ========================= DROOP BLOCK : Heaviside — unchanged from single phase ========
+#  The droop as ONE closed-form masked sum, with no extra variables at all. Windows
+#  W_b = H(v−VBP_b) − H(v−VBP_{b+1}) select the active segment; the sloped laws are
+#  anchored at their zero crossings, VBP[3] and VBP[4], so the pieces meet continuously.
+#  The unit step is exact — its derivative jumps at every breakpoint, which is what the
+#  NLP solver has to cope with.
+#  (op_ifelse / op_greater_than_or_equal_to are JuMP's nonlinear operators, JuMP ≥ 1.15.)
+Hstep(x) = op_ifelse(op_greater_than_or_equal_to(x, 0), 1.0, 0.0)
+
+vpv(i, t) = v[PV[i].bus, PV[i].phase, t]        # voltage this inverter actually senses
+
+@constraint(model, [i in 1:npv, t in 1:T],
+    Qdg[i, t] ==
+        PV[i].Smax * (Hstep(vpv(i,t) - VBP[1]) - Hstep(vpv(i,t) - VBP[2]))
+      + (-PV[i].Smax / (VBP[3] - VBP[2])) * (vpv(i,t) - VBP[3]) *
+            (Hstep(vpv(i,t) - VBP[2]) - Hstep(vpv(i,t) - VBP[3]))
+      + (-PV[i].Smax / (VBP[5] - VBP[4])) * (vpv(i,t) - VBP[4]) *
+            (Hstep(vpv(i,t) - VBP[4]) - Hstep(vpv(i,t) - VBP[5]))
+      - PV[i].Smax * (Hstep(vpv(i,t) - VBP[5]) - Hstep(vpv(i,t) - VBP[6])))
+# ================================ END DROOP BLOCK ======================================
+
+# ---- inverter capability: 16-segment polygon inscribing the apparent-power circle ------
+let k = 16
+    for l in 1:k
+        θ = l * π / k
+        @constraint(model, [i in 1:npv, t in 1:T],
+            cos(θ) * Pdg[i, t] + sin(θ) * Qdg[i, t] <=  PV[i].Smax)
+        @constraint(model, [i in 1:npv, t in 1:T],
+            cos(θ) * Pdg[i, t] + sin(θ) * Qdg[i, t] >= -PV[i].Smax)
+    end
+end
+@constraint(model, [i in 1:npv, t in 1:T], Pdg[i, t] <= Pavail[i, t])
+
+# ---- curtailment and objective ---------------------------------------------------------
+@constraint(model, [i in 1:npv, t in 1:T], PVC[i, t] == Pavail[i, t] - Pdg[i, t])
+@objective(model, Min, sum(PVC))
+
+@printf("model   : %d variables (%d binary), %d constraints\n",
+        num_variables(model), count(is_binary, all_variables(model)),
+        num_constraints(model; count_variable_in_set_constraints = false))
+
+secs = @elapsed optimize!(model)
+status = termination_status(model)
+status in (MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.ALMOST_LOCALLY_SOLVED) ||
+    error("solver returned $status")
+
+V   = value.(v)
+Pdg_v, Qdg_v, PVC_v = value.(Pdg), value.(Qdg), value.(PVC)
+
+# ==================================================================== 5) results ========
+kWh(x) = x * SBASE / 1e3 / 4                      # p.u. summed over 15-min steps → kWh
+E_avail = kWh(sum(Pavail))
+E_curt  = kWh(sum(PVC_v))
+println("\n================ RESULTS — LinDist3Flow + $METHOD ================")
+@printf("solve time          : %.1f s  (%s)\n", secs, status)
+@printf("PV energy available : %.1f kWh\n", E_avail)
+@printf("PV energy delivered : %.1f kWh\n", E_avail - E_curt)
+@printf("PV curtailment      : %.2f kWh  (%.3f %%)\n", E_curt, 100 * E_curt / E_avail)
+@printf("voltage range        : %.4f – %.4f p.u.\n", minimum(V), maximum(V))
+for φ in PHASES
+    @printf("  phase %d            : %.4f – %.4f p.u.\n", φ,
+            minimum(V[:, φ, :]), maximum(V[:, φ, :]))
+end
+
+# ---- verification 1: every dispatch point must lie ON the droop curve ------------------
+droop_q(vv, qb) = vv <= VBP[2] ? qb :
+                  vv <= VBP[3] ? qb * (VBP[3] - vv) / (VBP[3] - VBP[2]) :
+                  vv <= VBP[4] ? 0.0 :
+                  vv <= VBP[5] ? -qb * (vv - VBP[4]) / (VBP[5] - VBP[4]) : -qb
+dev = maximum(abs(Qdg_v[i, t] - droop_q(V[PV[i].bus, PV[i].phase, t], PV[i].Smax))
+              for i in 1:npv, t in 1:T)
+@printf("\nmax |q_dispatch − q_curve| : %.3e p.u.   (exactness of the %s encoding)\n", dev, METHOD)
+
+# ---- verification 2: LinDist3Flow voltages vs an exact three-phase power flow ----------
+#  Backward/forward sweep on the same dispatch. Kron-reduced three-wire model with
+#  implicit ground and zero shunts, so the sweep is exact for these injections.
+function sweep(t)
+    # Start from a properly rotated three-phase set: 1∠0°, 1∠−120°, 1∠+120°. Seeding all
+    # three phases at 1∠0° instead is a silent and expensive mistake — the mutual terms
+    # then add rather than largely cancelling, and the sweep reports roughly twice the
+    # true voltage deviation.
+    V0  = ComplexF64[1, exp(-2π * im / 3), exp(2π * im / 3)]
+    Vc  = [copy(V0) for _ in 1:nb]
+    Ibr = [zeros(ComplexF64, 3) for _ in 1:nbr]
+    child_of = [Int[] for _ in 1:nb]
+    for (k, br) in enumerate(BR); push!(child_of[bus_id[br.from]], k); end
+    rev = reverse(ORDER)
+    for _ in 1:60
+        S = [zeros(ComplexF64, 3) for _ in 1:nb]
+        for b in 1:nb, φ in PHASES
+            S[b][φ] = complex(Pload_pk[b, φ] * Pmult[t], Qload_pk[b, φ] * Qmult[t])
+        end
+        for (i, g) in enumerate(PV)
+            S[g.bus][g.phase] -= complex(Pdg_v[i, t], Qdg_v[i, t])
+        end
+        Ibus = [conj.(S[b] ./ Vc[b]) for b in 1:nb]
+        for bname in rev                                   # backward: currents
+            b = bus_id[bname]
+            b == islack && continue
+            (_, k) = PARENT[bname]
+            Ibr[k] = Ibus[b] + sum((Ibr[c] for c in child_of[b]), init = zeros(ComplexF64, 3))
+        end
+        for bname in ORDER                                 # forward: voltages
+            bname == SLACK && continue
+            (par, k) = PARENT[bname]
+            Vc[bus_id[bname]] = Vc[bus_id[par]] - BR[k].Z * Ibr[k]
+        end
+    end
+    return [abs(Vc[b][φ]) for b in 1:nb, φ in PHASES]
+end
+
+tmax = argmax([sum(Pdg_v[:, t]) for t in 1:T])             # busiest PV step
+Vtrue = sweep(tmax)
+gap   = maximum(abs.(V[:, :, tmax] .- Vtrue))
+@printf("LinDist3Flow vs exact AC at t=%d : max |Δv| = %.3e p.u.  (true range %.4f – %.4f)\n",
+        tmax, gap, minimum(Vtrue), maximum(Vtrue))
+
+# ==================================================================== 6) figures ========
+gr(size = (900, 520), legend = :topright, framestyle = :box, grid = true, gridalpha = 0.15,
+   left_margin = 6Plots.mm, bottom_margin = 4Plots.mm)
+hours = range(0, 24 - 24 / T, length = T)
+
+#  One curve per inverter class, drawn in ABSOLUTE p.u. VArs so the four saturation
+#  levels q̄ are visible — normalising by q̄ would collapse them onto a single line and
+#  hide the point. Every "+" is one 15-min dispatch point and must sit on the curve of
+#  its own class.
+CLSCOL = [:seagreen, :orangered, :dodgerblue, :mediumorchid]
+qmax   = maximum(g.Smax for g in PV)
+
+p1 = plot(size = (1050, 780), grid = false, framestyle = :axes,
+          title = "Dispatch vs. the IEEE 1547 droop — $METHOD, four classes, three phases",
+          titlefontsize = 13,
+          xlabel = "Voltage (p.u.)", ylabel = "VAR Gen. (p.u.)",
+          xlims = (VBP[1], VBP[6]), ylims = (-1.15qmax, 1.15qmax),
+          xticks = 0.90:0.05:1.10, guidefontsize = 12, tickfontsize = 10,
+          legendfontsize = 9, legend = :outertop, legend_columns = 4,
+          foreground_color_legend = :black, background_color_legend = :white,
+          left_margin = 6Plots.mm, right_margin = 8Plots.mm, bottom_margin = 5Plots.mm)
+
+vspan!(p1, [VLIM[1], VLIM[2]], color = :lightblue, alpha = 0.30, lw = 0, label = false)
+vline!(p1, [VLIM[1], VLIM[2]], ls = :dash, lw = 1.5, color = :gray65, label = false)
+hline!(p1, [0.0], ls = :dash, lw = 1.5, color = :gray65, label = false)
+
+for ci in 1:ncls
+    qb = S_OVER_P * PV_CLASSES[ci][2] * 1e3 / SBASE
+    plot!(p1, VBP, QSHAPE .* qb, lw = 3, color = CLSCOL[ci], label = false)
+    scatter!(p1, VBP[2:5], (QSHAPE .* qb)[2:5], m = :circle, ms = 6,
+             mc = CLSCOL[ci], msc = CLSCOL[ci], label = false)
+    idx = [i for i in 1:npv if PV[i].cls == ci]
+    scatter!(p1, vec([V[PV[i].bus, PV[i].phase, t] for i in idx, t in 1:T]),
+             vec([Qdg_v[i, t] for i in idx, t in 1:T]),
+             m = :+, ms = 7, msw = 2.5, mc = CLSCOL[ci], msc = CLSCOL[ci], label = false)
+end
+
+# legend proxies, parked outside xlims so they appear only in the key
+for ci in 1:ncls
+    plot!(p1, [1.5, 1.6], [0.0, 0.0], lw = 2, color = CLSCOL[ci], m = :circle, ms = 5,
+          mc = CLSCOL[ci], msc = CLSCOL[ci], label = "$(PV_CLASSES[ci][1]) droop")
+end
+for ci in 1:ncls
+    scatter!(p1, [1.5], [0.0], m = :+, ms = 7, msw = 2,
+             mc = CLSCOL[ci], msc = CLSCOL[ci], label = "$(PV_CLASSES[ci][1]) Q")
+end
+vspan!(p1, [1.5, 1.6], color = :lightblue, alpha = 0.30, lw = 0,
+       label = "Feasible Operation Region")
+display(p1)
+savefig(p1, joinpath(@__DIR__, "droop_dispatch_3ph$FIGSUF.png"))
+
+p2 = plot(xlabel = "hour of day", ylabel = "voltage (p.u.)", xticks = 0:3:24, xlims = (0, 24),
+          title = "Feeder voltage envelope by phase")
+for (φ, c) in zip(PHASES, (:seagreen, :orangered, :dodgerblue))
+    plot!(p2, hours, [maximum(V[:, φ, t]) for t in 1:T], lw = 2, color = c, label = "phase $φ max")
+    plot!(p2, hours, [minimum(V[:, φ, t]) for t in 1:T], lw = 2, ls = :dash, color = c,
+          label = "phase $φ min")
+end
+hline!(p2, [VLIM[1], VLIM[2]], ls = :dot, lw = 1.5, color = :red, label = "limits")
+display(p2)
+savefig(p2, joinpath(@__DIR__, "voltage_envelope_3ph$FIGSUF.png"))
+
+p3 = plot(hours, [sum(Pavail[:, t]) * SBASE / 1e3 for t in 1:T], lw = 2, ls = :dash,
+          color = :grey45, label = "available",
+          xlabel = "hour of day", ylabel = "kW", xticks = 0:3:24, xlims = (0, 24),
+          title = "Fleet PV: available vs delivered")
+plot!(p3, hours, [sum(Pdg_v[:, t]) * SBASE / 1e3 for t in 1:T], lw = 2, color = :darkorange2,
+      fillrange = 0, fillalpha = 0.15, label = "delivered")
+display(p3)
+savefig(p3, joinpath(@__DIR__, "pv_dispatch_3ph$FIGSUF.png"))
+
+println("\nwrote droop_dispatch_3ph$FIGSUF.png, voltage_envelope_3ph$FIGSUF.png, " *
+        "pv_dispatch_3ph$FIGSUF.png")
