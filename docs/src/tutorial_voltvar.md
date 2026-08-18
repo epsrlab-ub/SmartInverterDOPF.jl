@@ -1234,6 +1234,14 @@ inverters × time steps, which is the scaling wall for the integer methods. Big-
 its answer in fewer successive-linearisation passes here, but iteration counts of this
 kind are case-specific and should not be read as a general ranking.
 
+Heaviside's fewer passes do not translate into less total time, because a pass is not
+the same amount of work in the two solver worlds. Each Heaviside iteration asks Ipopt to
+run its interior-point method to convergence on the full nonlinear KKT system — roughly
+14 s per pass here — while each Big-M or Lambda iteration asks Gurobi to resolve a model
+that is still mostly linear, with only 1440 binaries riding on top of it — 4-6 s per pass.
+That per-iteration cost, not the pass count, is what makes Heaviside the slowest of the
+three despite needing the fewest of them.
+
 !!! warning "Solve times are indicative only"
     These timings come from a single run on one machine with one solver configuration,
     and the successive-linearisation loop rebuilds the model from scratch each pass. Read
