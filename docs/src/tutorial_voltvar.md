@@ -556,10 +556,7 @@ different package.
 The trade is accuracy against effort. LinDistFlow with Big-M or Lambda is a single MILP
 with no outer loop — which is why it is the usual choice in this literature
 [[6]](#ref-6), [[7]](#ref-7), and on the case study below it solves in well under a
-second against roughly half a minute for IVACOPF. What you give up is accuracy, and on
-this feeder you give up more than you might expect: the section
-[Where the curtailment comes from](@ref) audits both dispatches against an exact AC power
-flow, and LinDistFlow's turns out not to be deliverable. **Use IVACOPF for anything
+second against roughly half a minute for IVACOPF. What you give up is accuracy. **Use IVACOPF for anything
 quantitative**, which is also the choice made on accuracy grounds in [[11]](#ref-11).
 
 ### Using LinDistFlow to start IVACOPF
@@ -1260,29 +1257,6 @@ three despite needing the fewest of them.
     them as orders of magnitude, not as a ranking of the encodings: the few seconds
     between Big-M and Lambda here are well inside run-to-run variation, and reversing on
     another machine would surprise nobody.
-
-### Where the curtailment comes from
-
-The curtailed-energy column is the quantity the three encodings are being compared *on*,
-and they agree on it. It is worth asking what sets its level, because the usual suspects
-turn out not to be binding:
-
-| probe | outcome |
-|:--|:--|
-| voltage limits widened from ``[0.95, 1.05]`` to ``[0.90, 1.10]`` | curtailment unchanged |
-| voltage limits effectively removed, ``[0.50, 1.50]`` | curtailment unchanged |
-| MIP gap tightened from ``10^{-3}`` to ``0`` | identical to two decimals |
-| inverter capability at the most-curtailed step | ``\lvert S\rvert / S_{\max} \approx 0.38`` |
-| feeder voltage at the most-curtailed step | minimum ``0.983`` p.u., far inside limits |
-
-At the worst-curtailed quarter-hour the bus-7 inverter holds about 915 kW of 2200 kW
-available, with zero reactive output and no constraint active at its own bus or anywhere
-else on the feeder. Whatever sets that level, it is a property of the *host*, not of the
-droop encoding — which is why it does not disturb the comparison above: all three
-encodings sit inside the same host and inherit it equally.
-
-It would be easy to stop there and call the figure an artifact. The second host makes it
-possible to check instead.
 
 ### The two hosts disagree — and the exact power flow says which to believe
 
