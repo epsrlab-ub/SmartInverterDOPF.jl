@@ -26,7 +26,7 @@ const PHASES = 1:3
 const DATA   = joinpath(@__DIR__, "data")
 
 # ─────────────────────────────────────────────── configuration you may want to change ──
-const N_PV_PER_PHASE = 4         # PV sites per phase, placed at the electrically farthest load buses
+const N_PV_PER_PHASE = parse(Int, get(ENV, "TP_NPV", "4"))          # PV sites per phase, placed at the electrically farthest load buses
 # Four inverter classes. Each phase receives one of each, so size is not confounded with
 # phase or with distance from the substation. Because q̄ = S_max, the four classes follow
 # four *different* droop curves — same breakpoint voltages, four saturation levels.
@@ -45,7 +45,10 @@ const FIGSUF         = "_bigm"                # suffix on the figure filenames
 # ───────────────────────────────────────────────────────────────────────────────────────
 
 # ============================================================== 1) read the BMOPF case ==
-const CASE = "network_5_Feeder_2"
+# Feeder and horizon may be overridden from the environment, so the identical model can
+# be run on a much larger network without touching the code:
+#   TP_CASE=network_17_Feeder_6 TP_STEPS=24 julia --project=. <script>
+const CASE = get(ENV, "TP_CASE", "network_5_Feeder_2")
 net    = JSON3.read(read(joinpath(DATA, "$CASE.bmopf.json"), String))
 loadpr = JSON3.read(read(joinpath(DATA, "load_profile_residential_15min.json"), String))
 solar  = JSON3.read(read(joinpath(DATA, "solar_profile.json"), String))
@@ -60,10 +63,11 @@ SBASE      = SBASE_KVA * 1e3                                     # VA, per phase
 ZBASE      = VBASE^2 / SBASE
 const VNOM = 1.0
 
-T      = 96
-Pmult  = collect(Float64, loadpr.P_percent) ./ 100
-Qmult  = collect(Float64, loadpr.Q_percent) ./ 100
-G      = collect(Float64, solar.G_percent)  ./ 100
+T      = parse(Int, get(ENV, "TP_STEPS", "96"))
+step   = max(1, 96 ÷ T)
+Pmult  = collect(Float64, loadpr.P_percent)[1:step:end][1:T] ./ 100
+Qmult  = collect(Float64, loadpr.Q_percent)[1:step:end][1:T] ./ 100
+G      = collect(Float64, solar.G_percent)[1:step:end][1:T]  ./ 100
 
 # ---- lines: (from, to) and their 3×3 series impedance in p.u. -------------------------
 struct Branch

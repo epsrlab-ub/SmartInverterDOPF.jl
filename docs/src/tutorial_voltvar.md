@@ -82,6 +82,18 @@ tpc  = JSON3.read(read(joinpath(TPR, "case.json"), String))
 tpr  = Dict(m => JSON3.read(read(joinpath(TPR, "$m.json"), String))
             for m in ("bigm", "lambda", "heaviside"))
 
+tpsc = JSON3.read(read(joinpath(TPR, "scalability.json"), String))
+
+tp_scale_table() = md(
+    "| encoding | feeder | steps | variables | binaries | solve (s) | max droop deviation |",
+    "|:--|:--|--:|--:|--:|:--|--:|",
+    join([let r = row
+              solve = r.ok ? fmt(r.solve_seconds, 1) : "**did not solve**"
+              dev   = r.max_droop_deviation === nothing ? "—" : sci(r.max_droop_deviation)
+              "| $(NAMES[r.encoding]) | $(r.feeder) | $(r.steps) | " *
+              "$(r.nvar) | $(r.nbin) | $solve | $dev |"
+          end for row in tpsc.runs], "\n"))
+
 tp_class_table() = md(
     "| class | ``P`` rated | ``S_{\\max}`` | ``\\bar q`` (p.u.) | sites | buses |",
     "|:--|--:|--:|--:|--:|:--|",
@@ -1613,6 +1625,42 @@ host decides how much that model resembles the world.** Choosing a host is a sep
 decision from choosing an encoding, and this section only demonstrates that the second
 decision survives the move to three phases.
 
+### Does it scale?
+
+The encodings are cheap to state; the question is whether they survive a network worth
+calling realistic. The same three scripts were run unchanged on a second real feeder from
+the same ENWL family — `network_17_Feeder_6` [[15]](#ref-15), **3856 buses, 3855 lines,
+223 single-phase loads**, twenty times the first one — by setting an environment variable:
+
+```bash
+TP_CASE=network_17_Feeder_6 julia --project=examples/three_phase     examples/three_phase/LinDist3Flow_Lambda.jl
+```
+
+```@example tut
+tp_scale_table()   # hide
+```
+
+Two things to take from this.
+
+**The mixed-integer encodings scale.** Big-M and Lambda both carry a 3.3-million-variable
+model over the full 96-step day and solve it in about a minute — roughly twelve times the
+small feeder's solve for eighteen times the network, and the droop is still reproduced to
+solver tolerance. The binary count does not move at all between the two feeders, because
+it depends on inverters × time steps and not on network size. That is the useful property:
+**enlarging the network grows the linear part of the problem, not the combinatorial part.**
+
+**The integer-free encoding does not.** Heaviside is the cheapest of the three by variable
+count — it adds nothing to the model — and it is comfortably the most expensive to solve.
+On the small feeder it costs about five times Lambda. On the large one at the full horizon
+Ipopt gives up with `OTHER_ERROR`; shortening the day to twelve steps brings it back to a
+model an eighth the size, which then takes nine minutes. The non-smoothness that costs
+nothing to write costs a great deal to differentiate, and it is what limits this encoding
+long before the network does.
+
+None of this changes which encoding is *correct* — all three reproduce the curve exactly,
+here as before. It changes which one you would reach for on a feeder with an inverter at
+every service connection.
+
 ### Running it
 
 Each encoding has a standalone script in
@@ -1799,3 +1847,48 @@ power flow method for weakly meshed distribution and transmission networks," *IE
 Transactions on Power Systems*, vol. 3, no. 2, pp. 753–762, 1988.
 [doi:10.1109/59.192932](https://doi.org/10.1109/59.192932)
 — the **backward/forward sweep** used here as the exact AC reference
+
+**Test feeders**
+
+Both three-phase feeders are real Electricity North West low-voltage networks from the
+*Low Voltage Network Solutions* project, Kron-reduced to three wires. They reach this
+tutorial through two independent open repositories, and carry the same lineage and the
+same CC BY 4.0 licence.
+
+```@raw html
+<a id="ref-14"></a>
+```
+**[14]** F. Geth, *BMOPFDraftData* — draft benchmark datasets for the IEEE PES Task Force
+on Benchmarking Multiconductor OPF.
+[github.com/frederikgeth/BMOPFDraftData](https://github.com/frederikgeth/BMOPFDraftData)
+— source of `network_5_Feeder_2`
+([`output/ENWLvariants/Three-wire-Kron-reduced/`](https://github.com/frederikgeth/BMOPFDraftData/tree/main/output/ENWLvariants/Three-wire-Kron-reduced)),
+derived from the CSIRO four-wire LV dataset,
+[doi:10.25919/jaae-vc35](https://doi.org/10.25919/jaae-vc35)
+
+```@raw html
+<a id="ref-15"></a>
+```
+**[15]** R. Heidari, *PMDlab.jl* — test networks and functionality built on
+PowerModelsDistribution.jl.
+[github.com/hei06j/PMDlab.jl](https://github.com/hei06j/PMDlab.jl)
+— source of `network_17_Feeder_6`
+([`data/three-wire/network_17/Feeder_6`](https://github.com/hei06j/PMDlab.jl/tree/main/data/three-wire/network_17/Feeder_6)),
+used here for the scalability check
+
+```@raw html
+<a id="ref-16"></a>
+```
+**[16]** F. Geth, R. Heidari, and A. Koirala, "Computational analysis of impedance
+transformations for four-wire power networks with sparse neutral grounding," *Proceedings
+of the Thirteenth ACM International Conference on Future Energy Systems (e-Energy '22)*,
+pp. 105–113, 2022.
+[doi:10.1145/3538637.3538844](https://doi.org/10.1145/3538637.3538844)
+— the impedance transformation behind the three-wire Kron reduction of both feeders
+
+```@raw html
+<a id="ref-17"></a>
+```
+**[17]** A. J. Urquhart and M. Thomson, "Cable impedance data," figshare, 2019.
+[hdl:2134/15544](https://hdl.handle.net/2134/15544)
+— the length-normalised conductor impedances the feeders were rebuilt with

@@ -6,3 +6,4 @@ docs/site/
 *.jl.mem
 .DS_Store
 gurobi.log
+examples/three_phase/*.png

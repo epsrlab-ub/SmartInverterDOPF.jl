@@ -170,6 +170,24 @@ cost me a detour; the comment in `sweep()` marks the spot.
 | `data/network_5_Feeder_2_report.md` | its network summary, as published |
 | `data/load_profile_residential_15min.json` | residential load shape, 96 steps |
 | `data/solar_profile.json` | clear-sky irradiance, 96 steps |
+| `data/network_17_Feeder_6.bmopf.json` | the 3856-bus feeder used for the scalability check |
+
+## Scalability
+
+`scalability.jl` runs all three encodings on both feeders at the full 96-step horizon and
+writes `docs/src/assets/results/threephase/scalability.json`. Any script can be pointed at
+the larger feeder directly:
+
+```bash
+TP_CASE=network_17_Feeder_6 julia --project=. LinDist3Flow_Lambda.jl
+```
+
+`TP_CASE`, `TP_STEPS` and `TP_NPV` override the feeder, the horizon and the number of
+inverters per phase without touching the code.
+
+`network_17_Feeder_6` comes from [PMDlab.jl](https://github.com/hei06j/PMDlab.jl)
+(`data/three-wire/network_17/Feeder_6`), converted from OpenDSS to the same JSON schema as
+the other feeder. Same ENWL LVNS origin, same CC BY 4.0 licence, same Kron reduction.
 
 The feeder comes from
 [BMOPFDraftData](https://github.com/frederikgeth/BMOPFDraftData) (Frederik Geth),
