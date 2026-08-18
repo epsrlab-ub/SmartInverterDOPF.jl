@@ -85,7 +85,7 @@ tpr  = Dict(m => JSON3.read(read(joinpath(TPR, "$m.json"), String))
 tpsc = JSON3.read(read(joinpath(TPR, "scalability.json"), String))
 
 tp_scale_table() = md(
-    "| encoding | feeder | steps | variables | binaries | solve (s) | max droop deviation |",
+    "| encoding | feeder | time steps | variables | binaries | solve (s) | max droop deviation |",
     "|:--|:--|--:|--:|--:|:--|--:|",
     join([let r = row
               solve = r.ok ? fmt(r.solve_seconds, 1) : "**did not solve**"
