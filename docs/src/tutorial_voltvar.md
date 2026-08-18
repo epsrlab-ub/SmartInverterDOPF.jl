@@ -1626,7 +1626,7 @@ it depends on inverters × time steps and not on network size. That is the usefu
 **The integer-free encoding does not.** Heaviside is the cheapest of the three by variable
 count — it adds nothing to the model — and it is comfortably the most expensive to solve.
 On the small feeder it costs about five times Lambda. On the large one at the full horizon
-Ipopt gives up with `OTHER_ERROR`; shortening the day to twelve steps brings it back to a
+Ipopt gives up with `ERROR`; shortening the day to twelve steps brings it back to a
 model an eighth the size, which then takes nine minutes. The non-smoothness that costs
 nothing to write costs a great deal to differentiate, and it is what limits this encoding
 long before the network does.
