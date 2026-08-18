@@ -1318,7 +1318,7 @@ worst-curtailed step nothing sits at a limit, yet the exact power flow confirms 
 injection is not deliverable under the droop. Worth understanding before building
 curtailment studies on any host.
 
-## What the droop actually buys
+## Impact of Volt–Var Droop Control on Feeder Voltage Regulation
 
 The comparison so far has been between encodings. The more useful comparison is against
 not having the inverters at all. The base case is the same feeder and the same demand
