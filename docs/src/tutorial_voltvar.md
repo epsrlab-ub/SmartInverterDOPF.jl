@@ -144,7 +144,7 @@ tp_audit_table() = md(
               "$(fmt(r.audit.true_Vmax, 4)) |"
           end for (hname, res) in TPHOSTS], "\n"))
 
-# The successive-linearisation loop, pass by pass, measured against the paper's own
+# The successive-linearisation loop, pass by pass, measured against the error
 # metrics MAPB / MRPB / MVM rather than against the model's internal residual.
 tp_pass_table(m = "lambda") = md(
     "| pass | solve (s) | objective (p.u. curtailed) | MAPB | MRPB | MVM | solver status |",
@@ -643,8 +643,8 @@ quantitative**, which is also the choice made on accuracy grounds in [[11]](#ref
 ### Using LinDistFlow to start IVACOPF
 
 The two are not only alternatives — the cheap one makes the accurate one cheaper. By
-default IVACOPF begins from a flat profile (``v = 1\angle 0``, all currents zero), which
-is far from any solution. Passing `warm_start = :lindistflow` instead solves the linear
+default IVACOPF begins from the flat profile prescribed by Soltani, Khorsand and Ma
+[[4]](#ref-4) (``v = 1\angle 0``, all currents zero), which is far from any solution. Passing `warm_start = :lindistflow` instead solves the linear
 host first and expands its dispatch into a consistent complex state with an exact
 power-flow sweep, so the first linearisation is taken about a point that is already close:
 
@@ -667,7 +667,8 @@ cited below.
 
 ## The setup
 
-The IEEE 33-bus radial feeder, over a full day at 15-minute resolution — 96 time steps.
+The IEEE 33-bus radial feeder of Baran and Wu [[2]](#ref-2), over a full day at 15-minute
+resolution — 96 time steps.
 Three photovoltaic (PV) systems with smart inverters sit at buses 7, 18 and 33. Loads follow separate
 industrial, commercial and residential shapes; PV follows a clear-sky irradiance profile.
 
@@ -1411,7 +1412,7 @@ worst-curtailed step nothing sits at a limit, yet the exact power flow confirms 
 injection is not deliverable under the droop. Worth understanding before building
 curtailment studies on any host.
 
-## Impact of Volt–Var Droop Control on Feeder Voltage Regulation
+## Impact of Volt–Var droop control on feeder voltage regulation
 
 The comparison so far has been between encodings. The more useful comparison is against
 not having the inverters at all. The base case is the same feeder and the same demand
@@ -1516,16 +1517,23 @@ on phase 2.
 
 The question this section answers is not whether a three-phase network model can be
 built — it can — but **what changes in the droop encodings when it is**. The short answer
-is nothing, and the rest of this section is about why that is worth knowing.
+is nothing, and the sections that follow are about why that is worth knowing.
 
-To make that answer testable rather than merely plausible, the section carries **two**
+To make that answer testable rather than merely plausible, these sections carry **two**
 three-phase hosts — a linear one and a near-exact one — and runs all three encodings on
 both. Six runs, one curve, and a clean split between what the encoding is responsible for
 and what the network model is.
 
-### Two three-phase hosts
+Both feeders used below are real Electricity North West low-voltage networks from the
+*Low Voltage Network Solutions* project, Kron-reduced to three wires: `network_5_Feeder_2`
+[[14]](#ref-14) for the case study and `network_17_Feeder_6` [[15]](#ref-15) for the
+scalability check. The Kron reduction follows [[16]](#ref-16), and the conductor impedances
+are those of [[17]](#ref-17).
 
-The droop needs a host, and this section provides two — deliberately, because the pair
+## Two three-phase hosts
+
+The droop needs a host, and this tutorial provides two three-phase ones — deliberately,
+because the pair
 makes the separation between *encoding* and *host* measurable rather than merely asserted:
 
 **Table 14.** The two three-phase hosts, and the script family implementing each.
@@ -1555,7 +1563,7 @@ The last two lines are the whole point of the page: ``q_i(\cdot)`` is the IEEE 1
 encoded exactly by Big-M, Lambda/SOS2 or Heaviside, and ``v_{b(i)}^{\varphi(i)}`` is the
 one scalar each host has to supply.
 
-### Host A: LinDist3Flow
+## Host A: LinDist3Flow
 
 The multiphase form of the LinDistFlow linearisation [[3]](#ref-3), from Gan and
 Low [[12]](#ref-12). Each line carries a 3×3 phase impedance ``Z`` rather than a scalar,
@@ -1639,10 +1647,10 @@ end
 where `netP`/`netQ` collect the substation injection, the inverters at that bus and phase,
 and the local load.
 
-### Host B: three-phase IVACOPF
+## Host B: three-phase IVACOPF
 
 The **current-voltage AC optimal power flow** of Soltani, Khorsand and Ma [[4]](#ref-4),
-in its native three-phase unbalanced form — the setting the paper was written for. Its
+in its native three-phase unbalanced form — the setting [[4]](#ref-4) was written for. Its
 appeal here is structural. Write the network in rectangular current and voltage
 coordinates and the *line* equations become exactly linear, mutual coupling and all; the
 only nonlinearity left is the ``v \cdot I`` power balance and the voltage magnitude, and
@@ -1781,10 +1789,11 @@ Constraint (40) is worth pausing on: IVACOPF carries the line current as a decis
 variable, so a thermal limit is something you simply *write*. LinDist3Flow has no ``I`` to
 write it about. It is quadratic, so the scripts offer it as a polygon inscribing the circle
 — keeping the model an MILP — and leave it off by default, because on these Electricity
-North West (ENWL) feeders
-the peak flow is about a fifth of the conductor rating; the loading is reported either way.
+North West (ENWL) feeders [[14]](#ref-14), [[15]](#ref-15) the peak flow is about a fifth
+of the conductor rating; the loading is reported either way.
 
-**Slack reference.** The three-phase substation, which is also the flat start:
+**Slack reference.** The three-phase substation, which is also the flat start prescribed
+by Soltani, Khorsand and Ma [[4]](#ref-4):
 
 ```math
 v_0^{\mathrm{re},\varphi} = \cos\theta_{\varphi},\quad
@@ -1823,7 +1832,7 @@ against the true relations is what makes the converged point a genuine power-flo
 rather than a solution of the approximation — and the audit further down confirms it
 independently.
 
-#### In Julia
+### The IVACOPF host in Julia
 
 The whole host, with `_pr` marking a value carried over from the previous pass:
 
@@ -1890,17 +1899,18 @@ v_r_pr .= Vr; v_im_pr .= Vi; Ibs_r_pr .= Ibs_r_v; Ibs_im_pr .= Ibs_im_v   # refr
 max(MAPB, MRPB, MVM) < TOL && break
 ```
 
-#### Where the loop starts
+### Where the linearisation loop starts
 
 A flat start (``1\angle0°,\,1\angle{-120°},\,1\angle{+120°}`` with all currents zero) is
-what the paper prescribes and what the scripts fall back to with `TP_WARMSTART=flat`. By
+what Soltani, Khorsand and Ma [[4]](#ref-4) prescribe, and what the scripts fall back to
+with `TP_WARMSTART=flat`. By
 default they do something cheaper to converge from: one exact three-phase
 backward/forward sweep per time step, at full PV and zero VArs, which costs a few seconds
 and hands the first linearisation a physically consistent state instead of a guess. This
 is the three-phase analogue of the package's `warm_start = :lindistflow`, and the same
 sweep is reused afterwards to audit the answer.
 
-### What actually changes for the droop: one index
+## What actually changes for the droop: one index
 
 Here is the whole three-phase interface, in every encoding:
 
@@ -1984,11 +1994,11 @@ the *count* — the binaries in Big-M and Lambda now scale with inverters × tim
 feeder that may carry a single-phase inverter at every service connection, which is where
 the integer-free encoding starts to look attractive.
 
-### A mixed fleet makes the curves visible
+## A mixed fleet makes the curves visible
 
-The case study puts twelve inverters on a real unbalanced low-voltage (LV) feeder — 194 buses,
-eighteen single-phase loads split four, five and nine across the phases — in **four size
-classes**. Because ``\bar q = S_{\max}``, the four classes follow four *different* droop
+The case study puts twelve inverters on `network_5_Feeder_2` [[14]](#ref-14), a real
+unbalanced low-voltage (LV) feeder — 194 buses, eighteen single-phase loads split four,
+five and nine across the phases — in **four size classes**. Because ``\bar q = S_{\max}``, the four classes follow four *different* droop
 curves: same breakpoint voltages, four saturation levels. Each phase carries one inverter
 of each class.
 
@@ -2035,7 +2045,7 @@ tp_envelope_figure("lambda"; res = tpi, host = "IVACOPF")   # hide
 
 **Figure 11.** Voltage envelope by phase, IVACOPF host.
 
-### The two hosts, side by side
+## The two hosts, side by side
 
 Six runs: three encodings on each of two hosts, everything else held fixed.
 
@@ -2071,7 +2081,7 @@ property of the encoding; accuracy is a property of the host.** Every cell above
 round-off — the inverters sit on their curves *within whatever model they are placed in* —
 and Table 17 says nothing whatever about whether that model is right.
 
-### What the exact power flow says
+## What the exact power flow says
 
 To decide between the hosts you have to stop asking either model about itself. Take each
 solved dispatch, put it through an **exact three-phase backward/forward sweep**, and ask
@@ -2121,7 +2131,7 @@ near-balanced-voltage assumption behind the ``a^R``, ``a^X`` coefficients — an
 that is *least* true on exactly the kind of unbalanced LV feeder where single-phase
 inverters matter.
 
-### What each host costs
+## What each host costs
 
 **Table 19.** Successive-linearisation passes for the three-phase IVACOPF host, Lambda encoding, measured with the error metrics of (42).
 
@@ -2158,12 +2168,13 @@ The trade is the usual one, and it is the host's trade, not the encodings'. LinD
 is the right tool for a fast first look, for screening, and — as the single-phase section
 shows — for warm-starting the accurate model. **Use IVACOPF for anything quantitative.**
 
-### Does it scale?
+## Does it scale?
 
 The encodings are cheap to state; the question is whether they survive a network worth
-calling realistic. The three LinDist3Flow scripts were run unchanged on a second real feeder from
-the same ENWL family — `network_17_Feeder_6` [[15]](#ref-15), **3856 buses, 3855 lines,
-223 single-phase loads**, twenty times the first one — by setting an environment variable:
+calling realistic. The three LinDist3Flow scripts were run unchanged on a second real feeder
+from the same ENWL family — `network_17_Feeder_6` [[15]](#ref-15), **3856 buses, 3855 lines,
+223 single-phase loads**, twenty times `network_5_Feeder_2` [[14]](#ref-14) — by setting an
+environment variable:
 
 ```bash
 TP_CASE=network_17_Feeder_6 julia --project=examples/three_phase     examples/three_phase/LinDist3Flow_Lambda.jl
@@ -2207,7 +2218,7 @@ The sweep runs one process per row, separately from the case study above, so its
 will not match that table to the second. Read both as orders of magnitude, as the warning
 further up says.
 
-### Running it
+## Running the three-phase examples
 
 Every host × encoding pair has its own standalone script in
 [`examples/three_phase/`](https://github.com/ra-emami/SmartInverterDOPF.jl/tree/main/examples/three_phase).
@@ -2238,7 +2249,7 @@ different network without touching the code:
 | `TP_CASE` | `network_5_Feeder_2` | ENWL feeder to load |
 | `TP_STEPS` | `96` | time steps in the day |
 | `TP_NPV` | `4` | smart inverters per phase |
-| `TP_WARMSTART` | `sweep` | IVACOPF only — `flat` for the paper's flat start |
+| `TP_WARMSTART` | `sweep` | IVACOPF only — `flat` for the flat start of Soltani, Khorsand and Ma [[4]](#ref-4) |
 | `TP_TOL` | `1e-6` | IVACOPF only — stop tolerance on max(MAPB, MRPB, MVM) |
 | `TP_MAXITER` | `15` | IVACOPF only — pass limit |
 | `TP_IMAXSEG` | `0` | IVACOPF only — sides of the polygon enforcing (40); 0 disables it |
