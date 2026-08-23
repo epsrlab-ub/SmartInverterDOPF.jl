@@ -1573,7 +1573,8 @@ a^X_{\varphi\psi} &= 2\,\mathrm{Im}\!\left(\alpha^{\psi-\varphi} Z_{\varphi\psi}
 \end{aligned} \tag{30}
 ```
 
-with ``\alpha = e^{-j2\pi/3}`` the 120° rotation. The ``\pm\sqrt{3}`` cross-terms in the
+with ``w = \lvert V\rvert^2`` the squared voltage magnitude and ``\alpha = e^{-j2\pi/3}``
+the 120° rotation. The ``\pm\sqrt{3}`` cross-terms in the
 published form of these matrices are that rotation written out. Two checks are worth
 carrying: for a single phase ``\alpha^0 = 1`` gives ``a^R = 2r`` and ``a^X = 2x``,
 recovering ``w_j = w_i - 2(rP + xQ)``; and for diagonal ``Z`` the matrices are diagonal
