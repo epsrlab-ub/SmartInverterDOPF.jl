@@ -1,6 +1,6 @@
 # SmartInverterDOPF.jl
 
-[![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://ra-emami.github.io/SmartInverterDOPF.jl/dev/)
+[![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://epsrlab-ub.github.io/SmartInverterDOPF.jl/dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Embedding IEEE 1547 Volt-VAr droop curves into distribution optimal power flow.
@@ -13,13 +13,13 @@ runs each of them against four distribution OPF host models: two single-phase, t
 three-phase, linear and near-exact in each pair. The encodings agree; the hosts do not,
 and an exact AC power flow decides between them.
 
-**[Read the tutorial →](https://ra-emami.github.io/SmartInverterDOPF.jl/dev/tutorial_voltvar/)**
+**[Read the tutorial →](https://epsrlab-ub.github.io/SmartInverterDOPF.jl/dev/tutorial_voltvar/)**
 
 ## Quick start
 
 ```julia
 using Pkg
-Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
+Pkg.add(url = "https://github.com/epsrlab-ub/SmartInverterDOPF.jl")
 Pkg.add(["Gurobi", "Ipopt"])
 ```
 

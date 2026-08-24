@@ -82,7 +82,7 @@ solve_dopf(case, Gurobi.Optimizer; method = :lambda, warm_start = :lindistflow)
 
 ```julia
 using Pkg
-Pkg.add(url = "https://github.com/ra-emami/SmartInverterDOPF.jl")
+Pkg.add(url = "https://github.com/epsrlab-ub/SmartInverterDOPF.jl")
 ```
 
 You will also need a solver. `:bigm` and `:lambda` need an MILP solver; `:heaviside`
