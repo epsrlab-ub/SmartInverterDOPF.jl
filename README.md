@@ -8,8 +8,10 @@ Embedding IEEE 1547 Volt-VAr droop curves into distribution optimal power flow.
 A smart inverter does not accept a reactive-power set-point. It follows a Volt-VAr
 curve, deciding from its own terminal voltage how much reactive power to inject or
 absorb. An OPF that ignores that curve returns a dispatch the inverter is never going to
-deliver. This package puts the curve inside the optimisation — three different ways, on
-either of two distribution OPF host models — and shows that the encodings agree.
+deliver. This package puts the curve inside the optimisation — three different ways — and
+runs each of them against four distribution OPF host models: two single-phase, two
+three-phase, linear and near-exact in each pair. The encodings agree; the hosts do not,
+and an exact AC power flow decides between them.
 
 **[Read the tutorial →](https://ra-emami.github.io/SmartInverterDOPF.jl/dev/tutorial_voltvar/)**
 
@@ -31,7 +33,7 @@ kWh(case, sum(res.PVC))     # PV energy curtailed over the day, kWh
 extrema(res.V)              # voltage range across the feeder, p.u.
 ```
 
-## The two host models
+## The single-phase host models
 
 `method` picks how the droop curve is encoded; `host` picks the network model it sits
 inside. They are independent — the droop constraints are identical in both hosts.
@@ -81,25 +83,75 @@ All three are exact and, on the bundled case study, return the same dispatch to 
 solver tolerance. They differ in the solver technology they demand and in how they scale
 with inverters × time steps.
 
-## Case study
+## Case studies
 
-The IEEE 33-bus radial feeder over 24 h at 15-minute resolution (96 steps), with three
-PV smart inverters at buses 7, 18 and 33, per-class load shapes, a clear-sky irradiance
-profile, and a curtailment-minimising objective. The host model is a current-voltage
-AC-OPF solved by successive linearisation, with convergence checked against the exact
-nonlinear power-flow identity.
+Three feeders, all over 24 h at 15-minute resolution (96 steps), all minimising PV
+curtailment, all with voltages held inside `[0.95, 1.05]` p.u.
+
+| feeder | phases | size | inverters | used for |
+|:--|:--|:--|:--|:--|
+| IEEE 33-bus | single | 33 buses | 3, at buses 7 / 18 / 33 | the main case study; the package's `load_case()` |
+| `network_5_Feeder_2` | three | 194 buses, 18 single-phase loads split 4/5/9 | 12 in four size classes, 84 kW | the three-phase case study |
+| `network_17_Feeder_6` | three | 3856 buses, 223 single-phase loads | 12 | the scalability check |
+
+Both three-phase feeders are real Electricity North West low-voltage networks, Kron-reduced
+to three wires; sources and licence are in
+[`examples/three_phase/README.md`](examples/three_phase/README.md).
+
+Headline results, all three encodings agreeing to solver tolerance within each host:
+
+| case | host | curtailed | droop residual at the **true** AC voltage |
+|:--|:--|--:|--:|
+| 33-bus | IVACOPF | 3022.0 kWh | 7.9e-08 |
+| 33-bus | LinDistFlow | 60.5 kWh | 6.1e-02 — **not deliverable** |
+| 194-bus | IVACOPF | 42.69 kWh | 2.8e-11 |
+| 194-bus | LinDist3Flow | 46.32 kWh | 8.0e-03 |
+
+The last column is the test that separates the hosts: take each dispatch, solve the exact
+AC power flow for it, and ask whether the inverters would really have produced those VArs.
 
 ## Repository layout
 
 ```
-src/          the package: case data, droop encodings, DOPF
-data/         IEEE 33-bus feeder, load profiles, solar profile (JSON)
-scripts/      generate_results.jl — regenerates the precomputed documentation results
-examples/     three_phase/ — LinDist3Flow on a real unbalanced LV feeder,
-              one standalone script per encoding
-docs/         Documenter site; builds without any solver
-test/         test suite
+src/                    the package: case data, droop encodings, DOPF hosts
+data/                   IEEE 33-bus feeder, load profiles, solar profile (JSON)
+scripts/                generate_results.jl — recomputes the single-phase results
+examples/single_phase/  6 standalone scripts: {ivacopf,lindistflow} × {bigm,lambda,heaviside}
+examples/three_phase/   6 standalone scripts: {LinDist3Flow,IVACOPF3Ph} × {BigM,Lambda,Heaviside}
+                        plus generate_results.jl, scalability.jl, plot_network.jl
+docs/                   Documenter site; builds without any solver
+test/                   test suite
 ```
+
+Every standalone script is self-contained and shares its skeleton verbatim with its
+siblings, so a `diff` between any two shows only the droop block, or only the network
+model.
+
+## Three-phase examples
+
+[`examples/three_phase/`](examples/three_phase) runs the same three encodings on a real
+unbalanced LV feeder, against **two** three-phase hosts:
+
+| | Big-M | Lambda / SOS2 | Heaviside |
+|:--|:--|:--|:--|
+| **LinDist3Flow** — multiphase linearised branch flow, one pass | `LinDist3Flow_BigM.jl` | `LinDist3Flow_Lambda.jl` | `LinDist3Flow_Heaviside.jl` |
+| **IVACOPF** — three-phase current-voltage AC-OPF, successive linearisation | `IVACOPF3Ph_BigM.jl` | `IVACOPF3Ph_Lambda.jl` | `IVACOPF3Ph_Heaviside.jl` |
+
+```bash
+julia --project=examples/three_phase examples/three_phase/IVACOPF3Ph_Lambda.jl
+```
+
+Feeder, horizon and fleet come from the environment (`TP_CASE`, `TP_STEPS`, `TP_NPV`, and
+for IVACOPF `TP_WARMSTART`, `TP_TOL`, `TP_MAXITER`, `TP_IMAXSEG`), so the same model runs
+on a different network without editing anything.
+
+### Does it scale?
+
+`scalability.jl` reruns the LinDist3Flow scripts on the 3856-bus feeder. The mixed-integer
+encodings carry a 3.3-million-variable model over the full day in about a minute, and the
+binary count does not move between feeders — it depends on inverters × time steps, not on
+network size. The integer-free encoding is the one that breaks: Ipopt gives up at the full
+horizon and needs a shortened day to finish. All three stay exact wherever they finish.
 
 ## Regenerating the documentation results
 
@@ -111,19 +163,15 @@ recompute them:
 julia --project=scripts scripts/generate_results.jl
 ```
 
-and, for the three-phase section:
+and, for the three-phase section — which runs all six scripts, both hosts:
 
 ```bash
 julia --project=examples/three_phase examples/three_phase/generate_results.jl
 ```
 
-## Three-phase example
+`TP_HOSTS=ivacopf` or `TP_HOSTS=lindist3flow` regenerates one family only.
 
-[`examples/three_phase/`](examples/three_phase) applies the same three encodings to a
-real unbalanced low-voltage feeder — 194 buses, 18 single-phase loads split 4/5/9 across
-phases, 12 smart inverters in four size classes — on a **LinDist3Flow** host. One
-standalone script per encoding, sharing their skeleton verbatim. The feeder is CC BY 4.0;
-attribution is in that directory's README.
+## Building the documentation
 
 ```bash
 julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
