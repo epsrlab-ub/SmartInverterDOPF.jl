@@ -346,7 +346,7 @@ The three columns are three answers to one question — how do you say "it depen
 solver — and each pays for exactness in a different currency: a constant you must choose,
 a combinatorial structure, or differentiability.
 
-## The host model
+## The single-phase hosts
 
 The droop is a self-contained module. Whatever distribution OPF you use, it exposes a
 voltage magnitude at each inverter bus; the droop module adds the relationship tying
@@ -390,7 +390,7 @@ solve_dopf(case, Gurobi.Optimizer; method = :lambda, host = :lindistflow)  # Lin
 says otherwise. Both models are set out below — briefly, because the subject here is the
 droop, not the network model.
 
-### IVACOPF — the host used here
+### IVACOPF: the near-exact host
 
 The **current-voltage AC optimal power flow** (IVACOPF) of Soltani, Khorsand and Ma [[4]](#ref-4),
 with the successive-linearisation scheme used here developed further in [[11]](#ref-11). The
@@ -573,7 +573,7 @@ residual = maximum(abs(value((v_r[i,h,m] - v_r[j,h,m]) * Ibr_r[(i,j),h,m]
                    for (i,j) in BRANCH_SET, h in HOUR_SET, m in QUARTER_SET)
 ```
 
-### LinDistFlow — the linear alternative
+### LinDistFlow: the linear host
 
 **LinDistFlow** [[3]](#ref-3), the linearised form of the branch-flow model [[2]](#ref-2), is what most of
 the droop-integrated DOPF literature uses. It is the branch-flow model with the loss
@@ -640,7 +640,7 @@ with no outer loop — which is why it is the usual choice in this literature
 second against roughly half a minute for IVACOPF. What you give up is accuracy. **Use IVACOPF for anything
 quantitative**, which is also the choice made on accuracy grounds in [[11]](#ref-11).
 
-### Using LinDistFlow to start IVACOPF
+### Warm-starting IVACOPF from LinDistFlow
 
 The two are not only alternatives — the cheap one makes the accurate one cheaper. By
 default IVACOPF begins from the flat profile prescribed by Soltani, Khorsand and Ma
@@ -665,14 +665,14 @@ Two very different starting points converging on the same answer is evidence tha
 answer belongs to the model rather than to the trajectory, and it is one of the checks
 cited below.
 
-## The setup
+## The single-phase case study
 
 The IEEE 33-bus radial feeder of Baran and Wu [[2]](#ref-2), over a full day at 15-minute
 resolution — 96 time steps.
 Three photovoltaic (PV) systems with smart inverters sit at buses 7, 18 and 33. Loads follow separate
 industrial, commercial and residential shapes; PV follows a clear-sky irradiance profile.
 
-**Table 6.** The three smart inverters of the single-phase case study: array rating, inverter rating and the resulting reactive capability ``\bar q``.
+**Table 6.** The three smart inverters of the single-phase case study on the IEEE 33-bus feeder [[2]](#ref-2): array rating, inverter rating and the resulting reactive capability ``\bar q``.
 
 ```@example tut
 inverter_table()   # hide
@@ -804,7 +804,7 @@ maximum(abs(res.Qdg[i,h,m] - droop_q(curve, Vtrue[case.DG_SET[i],h,m],
 count(<(case.Vmin), Vtrue) + count(>(case.Vmax), Vtrue)         # real limit violations
 ```
 
-### Running any host with any encoding
+### Running the single-phase examples
 
 `method` and `host` are independent, so there are six single-phase combinations. Each has
 a standalone script in
@@ -1233,6 +1233,44 @@ restores differentiability at the cost of no longer representing the curve exact
 This is the check that matters. Each method is exact only if every one of the
 ``3 \times 96 = 288`` optimised operating points lands on the droop.
 
+### The droop-deviation metric
+
+Every table on this page that reports a **max droop deviation** reports the same
+quantity. Let ``q_i(\cdot)`` be the IEEE 1547 curve of (1), scaled by inverter ``i``'s
+reactive capability ``\bar q_i``; let ``q_i^{G}(t)`` be the reactive power the solver
+actually dispatched; and let ``v_i(t)`` be the terminal voltage that inverter senses. The
+deviation is the largest gap between the two, over every inverter and every time step:
+
+```math
+\Delta \;=\; \max_{i \in \mathcal{G},\; t}
+   \Big\lvert\, q_i^{G}(t) \;-\; q_i\big(v_i(t)\big) \,\Big\rvert \tag{29}
+```
+
+It is zero exactly when every dispatch point lies on the curve, so it is the number that
+decides whether an encoding is exact. Which voltage is substituted for ``v_i(t)`` changes
+what (29) measures, and the two readings are reported separately throughout:
+
+| ``v_i(t)`` taken from | what ``\Delta`` then measures |
+|:--|:--|
+| the host's own solution | **exactness of the encoding** — does the dispatch satisfy the curve inside the model? |
+| an exact AC power flow on the same dispatch | **accuracy of the host** — would the real inverter have produced that VAr output? |
+
+In code, `droop_q` is (1) written out and the maximum is taken directly:
+
+```julia
+droop_q(v, qb) = v <= VBP[2] ? qb :                                        # flat, +q̄
+                 v <= VBP[3] ? qb * (VBP[3] - v) / (VBP[3] - VBP[2]) :     # sloped
+                 v <= VBP[4] ? 0.0 :                                       # dead-band
+                 v <= VBP[5] ? -qb * (v - VBP[4]) / (VBP[5] - VBP[4]) :    # sloped
+                               -qb                                          # flat, −q̄
+
+dev = maximum(abs(Qdg_v[i, t] - droop_q(V[PV[i].bus, PV[i].phase, t], PV[i].Smax))
+              for i in 1:npv, t in 1:T)
+```
+
+Reported values sit between ``10^{-17}`` and ``10^{-6}`` p.u. — solver tolerance, not
+model error. A value of ``10^{-3}`` or larger would mean the encoding had failed.
+
 The curves below are drawn in **absolute p.u. VArs** rather than normalised by ``\bar
 q_i``. Normalising would collapse all three inverters onto one line and hide the thing
 worth seeing: each inverter has its own reactive capability, so each follows its own
@@ -1326,7 +1364,7 @@ dead-band. The saturated tails are never reached — on this feeder the voltage 
 to ``V^{\text{bp}}_2`` nor rises to ``V^{\text{bp}}_5``. The flat segments still have to be
 in the model, because the solver must be free to consider them, but they do no work here.
 
-## Side by side
+## The three encodings, side by side
 
 **Table 11.** The three encodings side by side on the single-phase case study, IVACOPF host.
 
@@ -1362,7 +1400,7 @@ three despite needing the fewest of them.
     between Big-M and Lambda here are well inside run-to-run variation, and reversing on
     another machine would surprise nobody.
 
-### The two hosts disagree — and the exact power flow says which to believe
+### Which host to believe: the exact power flow decides
 
 Running the same case on both hosts turns this from a puzzle into a measurement. Same
 feeder, same droop, same inverters, same objective; only the network model differs:
@@ -1530,7 +1568,7 @@ Both feeders used below are real Electricity North West low-voltage networks fro
 scalability check. The Kron reduction follows [[16]](#ref-16), and the conductor impedances
 are those of [[17]](#ref-17).
 
-## Two three-phase hosts
+## The three-phase hosts
 
 The droop needs a host, and this tutorial provides two three-phase ones — deliberately,
 because the pair
@@ -1556,14 +1594,14 @@ p_i^{\mathrm{curt}} &= \bar p_i(t) - p_i^{G} \;\ge\; 0 & &\text{curtailment}\\
    \quad \theta_l = \tfrac{l\pi}{16},\; l = 1,\dots,16 & &\text{capability polygon}\\
 q_i^{G} &= q_i\!\left(v_{b(i)}^{\varphi(i)}\right) & &\text{the droop}\\[2pt]
 \min \; & \textstyle\sum_{i,t} p_i^{\mathrm{curt}} & &\text{objective}
-\end{aligned} \tag{29}
+\end{aligned} \tag{30}
 ```
 
 The last two lines are the whole point of the page: ``q_i(\cdot)`` is the IEEE 1547 curve,
 encoded exactly by Big-M, Lambda/SOS2 or Heaviside, and ``v_{b(i)}^{\varphi(i)}`` is the
 one scalar each host has to supply.
 
-## Host A: LinDist3Flow
+### LinDist3Flow: the linear host
 
 The multiphase form of the LinDistFlow linearisation [[3]](#ref-3), from Gan and
 Low [[12]](#ref-12). Each line carries a 3×3 phase impedance ``Z`` rather than a scalar,
@@ -1578,7 +1616,7 @@ w_j^{\varphi} = w_i^{\varphi} - \sum_{\psi} \Big( a^R_{\varphi\psi} P_{ij}^{\psi
 \begin{aligned}
 a^R_{\varphi\psi} &= 2\,\mathrm{Re}\!\left(\alpha^{\psi-\varphi} Z_{\varphi\psi}\right)\\
 a^X_{\varphi\psi} &= 2\,\mathrm{Im}\!\left(\alpha^{\psi-\varphi} Z_{\varphi\psi}\right)
-\end{aligned} \tag{30}
+\end{aligned} \tag{31}
 ```
 
 with ``w = \lvert V\rvert^2`` the squared voltage magnitude and ``\alpha = e^{-j2\pi/3}``
@@ -1607,7 +1645,7 @@ v_j^{\varphi} &= v_i^{\varphi} - \sum_{\psi \in \Psi} \Big( \tilde a^R_{\varphi\
                                        + \tilde a^X_{\varphi\psi} Q_{ij}^{\psi} \Big)
                                    & &\forall (i,j) \in \mathcal{L},\ \varphi \in \Psi\\
 V^{\min} &\le v_j^{\varphi} \le V^{\max} & &\forall j \in \mathcal{B},\ \varphi \in \Psi
-\end{aligned} \tag{31}
+\end{aligned} \tag{32}
 ```
 
 with ``\Psi = \{a,b,c\}`` the phase set, ``\varphi`` and ``\psi`` phases within it, and
@@ -1647,7 +1685,7 @@ end
 where `netP`/`netQ` collect the substation injection, the inverters at that bus and phase,
 and the local load.
 
-## Host B: three-phase IVACOPF
+### Three-phase IVACOPF: the near-exact host
 
 The **current-voltage AC optimal power flow** of Soltani, Khorsand and Ma [[4]](#ref-4),
 in its native three-phase unbalanced form — the setting [[4]](#ref-4) was written for. Its
@@ -1672,12 +1710,12 @@ admittance ``y_{nm}^{p,k}``:
 V_n^{\varphi} - V_m^{\varphi} = \sum_{p\in\Psi} Z_{nm}^{\varphi p} I_{nm}^{p}
    \;-\; \tfrac{1}{2}\sum_{p\in\Psi} Z_{nm}^{\varphi p}
           \Big( \sum_{k\in\Psi} y_{nm}^{p,k} V_n^{k} \Big),
-\qquad \forall \varphi \in \Psi \tag{32}
+\qquad \forall \varphi \in \Psi \tag{33}
 ```
 
 Three physical contributions, in two sums: the current in the same phase (the ``p = \varphi``
 term), the currents in the *other* phases reaching this one through the mutual impedances,
-and the shunt current. Splitting (32) into real and imaginary parts gives, for the
+and the shunt current. Splitting (33) into real and imaginary parts gives, for the
 Kron-reduced three-wire feeders used here — where ``y = 0``,
 
 ```math
@@ -1689,7 +1727,7 @@ v_n^{\mathrm{im},\varphi} - v_m^{\mathrm{im},\varphi}
   &= \sum_{p\in\Psi}\Big( R_{nm}^{\varphi p} I_{nm}^{\mathrm{im},p}
                         + X_{nm}^{\varphi p} I_{nm}^{\mathrm{re},p} \Big)
 \end{aligned}
-\qquad \forall (n,m) \in \mathcal{L},\ \varphi \in \Psi \tag{33}
+\qquad \forall (n,m) \in \mathcal{L},\ \varphi \in \Psi \tag{34}
 ```
 
 These are **exact and linear**. No rotation operator appears, nothing is transposed, and
@@ -1703,7 +1741,7 @@ I_n^{\mathrm{re},\varphi} = \sum_{m:(n,m)\in\mathcal{L}} I_{nm}^{\mathrm{re},\va
                           - \sum_{k:(k,n)\in\mathcal{L}} I_{kn}^{\mathrm{re},\varphi},
 \qquad
 I_n^{\mathrm{im},\varphi} = \sum_{m:(n,m)\in\mathcal{L}} I_{nm}^{\mathrm{im},\varphi}
-                          - \sum_{k:(k,n)\in\mathcal{L}} I_{kn}^{\mathrm{im},\varphi} \tag{34}
+                          - \sum_{k:(k,n)\in\mathcal{L}} I_{kn}^{\mathrm{im},\varphi} \tag{35}
 ```
 
 **Power balance** — the first of the two nonlinear relations:
@@ -1717,10 +1755,10 @@ q_n^{G,\varphi} - q_n^{L,\varphi}
    &= v_n^{\mathrm{im},\varphi} I_n^{\mathrm{re},\varphi}
     - v_n^{\mathrm{re},\varphi} I_n^{\mathrm{im},\varphi}
 \end{aligned}
-\qquad \forall n \in \Upsilon,\ \varphi \in \Psi \tag{35}
+\qquad \forall n \in \Upsilon,\ \varphi \in \Psi \tag{36}
 ```
 
-**Linearised power balance.** Each product ``xy`` in (35) is replaced by its first-order
+**Linearised power balance.** Each product ``xy`` in (36) is replaced by its first-order
 Taylor expansion about the previous iterate, ``xy \approx x^{\circ}y + y^{\circ}x -
 x^{\circ}y^{\circ}``, where ``\circ`` marks a value **fixed from the previous pass** — a
 constant, not a variable:
@@ -1739,7 +1777,7 @@ constant, not a variable:
    - I_n^{\mathrm{im},\varphi\circ} v_n^{\mathrm{re},\varphi}
    - v_n^{\mathrm{im},\varphi\circ} I_n^{\mathrm{re},\varphi\circ}
    + v_n^{\mathrm{re},\varphi\circ} I_n^{\mathrm{im},\varphi\circ}
-\end{aligned} \tag{36}
+\end{aligned} \tag{37}
 ```
 
 which are then set equal to the net injection at each class of bus:
@@ -1752,7 +1790,7 @@ q_0^{\mathrm{grid},\varphi} &= \mathcal{Q}_0^{\varphi} & &\text{substation}\\
 -q_n^{L,\varphi} &= \mathcal{Q}_n^{\varphi} & &\text{load-only bus and phase}\\
 p_i^{G} - p_n^{L,\varphi} &= \mathcal{P}_n^{\varphi}, &
 q_i^{G} - q_n^{L,\varphi} &= \mathcal{Q}_n^{\varphi} & &\text{inverter } i \text{ at } (n,\varphi)
-\end{aligned} \tag{37}
+\end{aligned} \tag{38}
 ```
 
 The last line is where the droop enters the network: ``q_i^{G}`` is exactly the variable
@@ -1767,14 +1805,14 @@ v_n^{\varphi} = \sqrt{\big(v_n^{\mathrm{re},\varphi}\big)^2 + \big(v_n^{\mathrm{
 v_n^{\varphi} = \frac{v_n^{\mathrm{re},\varphi\circ}}
    {\sqrt{\big(v_n^{\mathrm{re},\varphi\circ}\big)^2 + \big(v_n^{\mathrm{im},\varphi\circ}\big)^2}}\, v_n^{\mathrm{re},\varphi}
  + \frac{v_n^{\mathrm{im},\varphi\circ}}
-   {\sqrt{\big(v_n^{\mathrm{re},\varphi\circ}\big)^2 + \big(v_n^{\mathrm{im},\varphi\circ}\big)^2}}\, v_n^{\mathrm{im},\varphi} \tag{38}
+   {\sqrt{\big(v_n^{\mathrm{re},\varphi\circ}\big)^2 + \big(v_n^{\mathrm{im},\varphi\circ}\big)^2}}\, v_n^{\mathrm{im},\varphi} \tag{39}
 ```
 
 **Voltage limits.** The band every bus and phase must stay inside:
 
 ```math
 V^{\min} \le v_n^{\varphi} \le V^{\max},
-\qquad \forall n \in \Upsilon,\ \varphi \in \Psi \tag{39}
+\qquad \forall n \in \Upsilon,\ \varphi \in \Psi \tag{40}
 ```
 
 **Thermal line limits.** The conductor rating, per line and phase:
@@ -1782,10 +1820,10 @@ V^{\min} \le v_n^{\varphi} \le V^{\max},
 ```math
 \big(I_{nm}^{\mathrm{re},\varphi}\big)^2 + \big(I_{nm}^{\mathrm{im},\varphi}\big)^2
    \le \big(I_{nm}^{\max,\varphi}\big)^2,
-\qquad \forall (n,m) \in \mathcal{L},\ \varphi \in \Psi \tag{40}
+\qquad \forall (n,m) \in \mathcal{L},\ \varphi \in \Psi \tag{41}
 ```
 
-Constraint (40) is worth pausing on: IVACOPF carries the line current as a decision
+Constraint (41) is worth pausing on: IVACOPF carries the line current as a decision
 variable, so a thermal limit is something you simply *write*. LinDist3Flow has no ``I`` to
 write it about. It is quadratic, so the scripts offer it as a polygon inscribing the circle
 — keeping the model an MILP — and leave it off by default, because on these Electricity
@@ -1798,7 +1836,7 @@ by Soltani, Khorsand and Ma [[4]](#ref-4):
 ```math
 v_0^{\mathrm{re},\varphi} = \cos\theta_{\varphi},\quad
 v_0^{\mathrm{im},\varphi} = \sin\theta_{\varphi},
-\qquad \theta = (0°,\, -120°,\, +120°) \tag{41}
+\qquad \theta = (0°,\, -120°,\, +120°) \tag{42}
 ```
 
 Seeding all three phases at ``1\angle 0°`` instead is a silent and expensive mistake: the
@@ -1808,7 +1846,7 @@ mutual terms then add rather than largely cancelling.
 nonlinear relations — not against the model's own residual. Following [[4]](#ref-4), three
 metrics are used: the **maximum absolute active power balance** error (MAPB), the
 **maximum absolute reactive power balance** error (MRPB), and the **maximum
-voltage-magnitude** error (MVM). Writing (35) minus (36) and (38) exact minus linearised,
+voltage-magnitude** error (MVM). Writing (36) minus (37) and (39) exact minus linearised,
 
 ```math
 \begin{aligned}
@@ -1823,7 +1861,7 @@ voltage-magnitude** error (MVM). Writing (35) minus (36) and (38) exact minus li
 \text{MVM} &= \max_{n\in\Upsilon,\,\varphi\in\Psi}
    \Big| \sqrt{\big(v_n^{\mathrm{re},\varphi}\big)^2 + \big(v_n^{\mathrm{im},\varphi}\big)^2}
          - v_n^{\varphi} \Big|
-\end{aligned} \tag{42}
+\end{aligned} \tag{43}
 ```
 
 the loop repeats with a refreshed ``\circ`` point until
@@ -1832,17 +1870,17 @@ against the true relations is what makes the converged point a genuine power-flo
 rather than a solution of the approximation — and the audit further down confirms it
 independently.
 
-### The IVACOPF host in Julia
+#### The three-phase IVACOPF host in Julia
 
 The whole host, with `_pr` marking a value carried over from the previous pass:
 
 ```julia
-# ---- slack reference: 1∠0°, 1∠−120°, 1∠+120° — eq. (41) --------------------------
+# ---- slack reference: 1∠0°, 1∠−120°, 1∠+120° — eq. (42) --------------------------
 const V0 = ComplexF64[1, exp(-2π*im/3), exp(2π*im/3)]
 @constraint(model, [φ in PHASES, t in 1:T], v_r[islack, φ, t]  == real(V0[φ]))
 @constraint(model, [φ in PHASES, t in 1:T], v_im[islack, φ, t] == imag(V0[φ]))
 
-# ---- line current constraints, eq. (33): exact, linear, fully phase-coupled ---------
+# ---- line current constraints, eq. (34): exact, linear, fully phase-coupled ---------
 @constraint(model, [k in 1:nbr, φ in PHASES, t in 1:T],
     v_r[bus_id[BR[k].from], φ, t] - v_r[bus_id[BR[k].to], φ, t] ==
         sum(Rm[k][φ,ψ] * Ibr_r[k,ψ,t] - Xm[k][φ,ψ] * Ibr_im[k,ψ,t] for ψ in PHASES))
@@ -1850,7 +1888,7 @@ const V0 = ComplexF64[1, exp(-2π*im/3), exp(2π*im/3)]
     v_im[bus_id[BR[k].from], φ, t] - v_im[bus_id[BR[k].to], φ, t] ==
         sum(Rm[k][φ,ψ] * Ibr_im[k,ψ,t] + Xm[k][φ,ψ] * Ibr_r[k,ψ,t] for ψ in PHASES))
 
-# ---- bus current injection, eq. (34): KCL per bus and phase -------------------------
+# ---- bus current injection, eq. (35): KCL per bus and phase -------------------------
 @constraint(model, [b in 1:nb, φ in PHASES, t in 1:T],
     Ibs_r[b,φ,t] == sum(Ibr_r[k,φ,t] for k in out_br[b]; init = zero(AffExpr))
                   - sum(Ibr_r[k,φ,t] for k in in_br[b];  init = zero(AffExpr)))
@@ -1858,7 +1896,7 @@ const V0 = ComplexF64[1, exp(-2π*im/3), exp(2π*im/3)]
     Ibs_im[b,φ,t] == sum(Ibr_im[k,φ,t] for k in out_br[b]; init = zero(AffExpr))
                    - sum(Ibr_im[k,φ,t] for k in in_br[b];  init = zero(AffExpr)))
 
-# ---- power balance, eq. (35), linearised as eq. (36)–(37) ---------------------------
+# ---- power balance, eq. (36), linearised as eq. (37)–(38) ---------------------------
 Plin(b,φ,t) = v_r_pr[b,φ,t]  * Ibs_r[b,φ,t]  + Ibs_r_pr[b,φ,t]  * v_r[b,φ,t] +
               v_im_pr[b,φ,t] * Ibs_im[b,φ,t] + Ibs_im_pr[b,φ,t] * v_im[b,φ,t] -
               v_r_pr[b,φ,t]  * Ibs_r_pr[b,φ,t] - v_im_pr[b,φ,t] * Ibs_im_pr[b,φ,t]
@@ -1870,12 +1908,12 @@ Qlin(b,φ,t) = v_im_pr[b,φ,t] * Ibs_r[b,φ,t]  + Ibs_r_pr[b,φ,t]  * v_im[b,φ,
 @constraint(model, [b in 1:nb, φ in PHASES, t in 1:T], netQ[b,φ,t] == Qlin(b,φ,t))
 #                                                      ↑ where the droop meets the network
 
-# ---- voltage magnitude, eq. (38) — this is the v the droop reads -------------------
+# ---- voltage magnitude, eq. (39) — this is the v the droop reads -------------------
 @constraint(model, [b in 1:nb, φ in PHASES, t in 1:T],
     v[b,φ,t] == (v_r_pr[b,φ,t]  / hypot(v_r_pr[b,φ,t], v_im_pr[b,φ,t])) * v_r[b,φ,t]
               + (v_im_pr[b,φ,t] / hypot(v_r_pr[b,φ,t], v_im_pr[b,φ,t])) * v_im[b,φ,t])
 
-# ---- thermal line limit, eq. (40), as a linear polygon inscribing the circle --------
+# ---- thermal line limit, eq. (41), as a linear polygon inscribing the circle --------
 for l in 1:IMAX_SEG
     θ = l * π / IMAX_SEG
     @constraint(model, [k in 1:nbr, φ in PHASES, t in 1:T],
@@ -1899,7 +1937,7 @@ v_r_pr .= Vr; v_im_pr .= Vi; Ibs_r_pr .= Ibs_r_v; Ibs_im_pr .= Ibs_im_v   # refr
 max(MAPB, MRPB, MVM) < TOL && break
 ```
 
-### Where the linearisation loop starts
+#### Where the linearisation loop starts
 
 A flat start (``1\angle0°,\,1\angle{-120°},\,1\angle{+120°}`` with all currents zero) is
 what Soltani, Khorsand and Ma [[4]](#ref-4) prescribe, and what the scripts fall back to
@@ -1910,7 +1948,7 @@ and hands the first linearisation a physically consistent state instead of a gue
 is the three-phase analogue of the package's `warm_start = :lindistflow`, and the same
 sweep is reused afterwards to audit the answer.
 
-## What actually changes for the droop: one index
+## What changes for the droop: one index
 
 Here is the whole three-phase interface, in every encoding:
 
@@ -1926,7 +1964,7 @@ variable, and constrains one scalar reactive output against it.
 That is why the three droop blocks below are the same algebra as their single-phase
 counterparts, with `v[d,h,m]` replaced by `vpv(i,t)` — and why the *same* three blocks
 drop unchanged into either host. In LinDist3Flow `v` is a decision variable directly; in
-IVACOPF it is the linearised magnitude (38). The droop neither knows nor cares.
+IVACOPF it is the linearised magnitude (39). The droop neither knows nor cares.
 
 **Lambda / SOS2** — weights shared between the sensed voltage and the reactive output:
 
@@ -1994,7 +2032,7 @@ the *count* — the binaries in Big-M and Lambda now scale with inverters × tim
 feeder that may carry a single-phase inverter at every service connection, which is where
 the integer-free encoding starts to look attractive.
 
-## A mixed fleet makes the curves visible
+## The three-phase case study
 
 The case study puts twelve inverters on `network_5_Feeder_2` [[14]](#ref-14), a real
 unbalanced low-voltage (LV) feeder — 194 buses, eighteen single-phase loads split four,
@@ -2002,7 +2040,7 @@ five and nine across the phases — in **four size classes**. Because ``\bar q =
 curves: same breakpoint voltages, four saturation levels. Each phase carries one inverter
 of each class.
 
-**Table 15.** The four inverter size classes of the three-phase case study. Because ``\bar q = S_{\max}``, each class follows a different droop curve.
+**Table 15.** The four inverter size classes of the three-phase case study on `network_5_Feeder_2` [[14]](#ref-14). Because ``\bar q = S_{\max}``, each class follows a different droop curve.
 
 ```@example tut
 tp_class_table()   # hide
@@ -2133,7 +2171,7 @@ inverters matter.
 
 ## What each host costs
 
-**Table 19.** Successive-linearisation passes for the three-phase IVACOPF host, Lambda encoding, measured with the error metrics of (42).
+**Table 19.** Successive-linearisation passes for the three-phase IVACOPF host, Lambda encoding, measured with the error metrics of (43).
 
 ```@example tut
 tp_pass_table()   # hide
@@ -2159,7 +2197,7 @@ the price, and Table 18 is what it buys.
 |:--|:--|:--|
 | line equations | approximate — ``\alpha``-rotated drop coefficients, near-balance assumed | **exact** — ``\Delta V = ZI`` with full mutual coupling, nothing assumed |
 | losses | dropped from the balance | modelled, via the current variables |
-| line currents | not represented | decision variables, so the thermal limit (40) is writable |
+| line currents | not represented | decision variables, so the thermal limit (41) is writable |
 | nonlinearity | none | two bus relations, ``v\cdot I`` and ``\lvert v\rvert``, linearised and iterated |
 | solve | **one pass** | one MILP (or NLP) **per pass**, plus warm-start sweeps |
 | dispatch on the real network | off the droop by a visible margin | on the droop to round-off |
@@ -2180,7 +2218,7 @@ environment variable:
 TP_CASE=network_17_Feeder_6 julia --project=examples/three_phase     examples/three_phase/LinDist3Flow_Lambda.jl
 ```
 
-**Table 21.** Scalability of the three encodings on the LinDist3Flow host, across a 194-bus and a 3856-bus feeder.
+**Table 21.** Scalability of the three encodings on the LinDist3Flow host, across the 194-bus `network_5_Feeder_2` [[14]](#ref-14) and the 3856-bus `network_17_Feeder_6` [[15]](#ref-15). “Max droop deviation” is ``\Delta`` of (29), evaluated at each host's own voltages.
 
 ```@example tut
 tp_scale_table()   # hide
@@ -2246,13 +2284,13 @@ different network without touching the code:
 
 | variable | default | meaning |
 |:--|:--|:--|
-| `TP_CASE` | `network_5_Feeder_2` | ENWL feeder to load |
+| `TP_CASE` | `network_5_Feeder_2` | ENWL feeder to load — `network_5_Feeder_2` [[14]](#ref-14) or `network_17_Feeder_6` [[15]](#ref-15) |
 | `TP_STEPS` | `96` | time steps in the day |
 | `TP_NPV` | `4` | smart inverters per phase |
 | `TP_WARMSTART` | `sweep` | IVACOPF only — `flat` for the flat start of Soltani, Khorsand and Ma [[4]](#ref-4) |
-| `TP_TOL` | `1e-6` | IVACOPF only — stop tolerance on max(MAPB, MRPB, MVM) |
+| `TP_TOL` | `1e-6` | IVACOPF only — stop tolerance on ``\max(\text{MAPB}, \text{MRPB}, \text{MVM})``, eq. (43) |
 | `TP_MAXITER` | `15` | IVACOPF only — pass limit |
-| `TP_IMAXSEG` | `0` | IVACOPF only — sides of the polygon enforcing (40); 0 disables it |
+| `TP_IMAXSEG` | `0` | IVACOPF only — sides of the polygon enforcing (41); 0 disables it |
 
 ```bash
 TP_CASE=network_17_Feeder_6 TP_STEPS=24 julia --project=examples/three_phase examples/three_phase/IVACOPF3Ph_Lambda.jl

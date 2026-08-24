@@ -1,6 +1,7 @@
 # =====================================================================================
 #  Three-phase Volt-VAr droop in a distribution OPF
 #  HOST   : LinDist3Flow  — the three-phase (multiphase) LinDistFlow linearisation
+#                          of Gan & Low, PSCC 2014, doi:10.1109/PSCC.2014.7038399
 #  DROOP  : Heaviside      — segment masks from unit steps, no integers at all
 #
 #  Test system : network_5_Feeder_2, a real 415/240 V LV feeder from the ENWL dataset,
@@ -15,6 +16,9 @@
 #  This is the three-phase counterpart of the single-phase 33-bus / LinDistFlow / Lambda
 #  case. The droop block is unchanged from the single-phase version — it only ever needs
 #  a voltage variable per inverter — so everything new here is in the network model.
+#
+#  Equation numbers in the comments below are the tutorial's:
+#  https://ra-emami.github.io/SmartInverterDOPF.jl/dev/tutorial_voltvar/#LinDist3Flow:-the-linear-host
 #
 #  Run:   julia --project=. LinDist3Flow_Heaviside.jl
 # =====================================================================================
@@ -35,7 +39,7 @@ const PV_CLASSES = (("A — 3 kW",  3.0),
                     ("C — 8 kW",  8.0),
                     ("D — 12 kW", 12.0))
 const S_OVER_P       = 1.1       # inverter oversizing: S_max = 1.1 * P_rated
-const VLIM           = (0.95, 1.05)              # bus voltage limits, p.u.
+const VLIM           = (0.95, 1.05)              # bus voltage limits, p.u. — eq. (32)
 const VBP            = [0.88, 0.90, 0.97, 1.00, 1.02, 1.10]   # IEEE 1547 breakpoints, p.u.
 const QSHAPE         = [1.0, 1.0, 0.0, 0.0, -1.0, -1.0]       # q / q̄ at each breakpoint
 const SBASE_KVA      = 100.0     # per-phase power base
@@ -105,6 +109,8 @@ for (_, ld) in pairs(net.load)
 end
 
 # =============================================== 2) LinDist3Flow voltage-drop matrices ==
+#  This whole block is eq. (31) of the tutorial.
+#
 #  For a line with 3×3 phase impedance Z, and voltages that are near-balanced (the
 #  standing assumption of every LinDistFlow variant), the drop in *squared* magnitude is
 #
@@ -126,6 +132,8 @@ end
 #  OPF in multiphase radial networks", PSCC 2014 (doi:10.1109/PSCC.2014.7038399).
 const ALPHA = exp(-2π * im / 3)
 
+# aR, aX of eq. (31); the trailing 2·VNOM divisor converts to the magnitude form used
+# by the voltage-drop constraint of eq. (32).
 function drop_matrices(Z::Matrix{ComplexF64})
     aR = zeros(3, 3)
     aX = zeros(3, 3)
@@ -215,7 +223,7 @@ model = Model(Ipopt.Optimizer)
 set_optimizer_attribute(model, "max_iter", 3000)
 set_optimizer_attribute(model, "print_level", 0)
 
-@variable(model, VLIM[1] <= v[1:nb, PHASES, 1:T] <= VLIM[2], start = VNOM)
+@variable(model, VLIM[1] <= v[1:nb, PHASES, 1:T] <= VLIM[2], start = VNOM)  # limits: eq. (32)
 @variable(model, P[1:nbr, PHASES, 1:T])
 @variable(model, Q[1:nbr, PHASES, 1:T])
 @variable(model, Pg[PHASES, 1:T])
@@ -225,14 +233,16 @@ set_optimizer_attribute(model, "print_level", 0)
 @variable(model, 0 <= PVC[1:npv, 1:T])
 
 islack = bus_id[SLACK]
+# slack reference — first line of eq. (32)
 @constraint(model, [φ in PHASES, t in 1:T], v[islack, φ, t] == VNOM)
 
-# ---- LinDist3Flow voltage drop --------------------------------------------------------
+# ---- LinDist3Flow voltage drop, eq. (31) in the magnitude form of eq. (32) ------------
 @constraint(model, [k in 1:nbr, φ in PHASES, t in 1:T],
     v[bus_id[BR[k].to], φ, t] == v[bus_id[BR[k].from], φ, t]
         - sum(AR[k][φ, ψ] * P[k, ψ, t] + AX[k][φ, ψ] * Q[k, ψ, t] for ψ in PHASES))
 
-# ---- power balance per bus and phase (losses neglected — that is the linearisation) ---
+# ---- power balance per bus and phase, eq. (32) — losses neglected, which is the
+#      whole of the linearisation --------------------------------------------------------
 out_br = [Int[] for _ in 1:nb]
 in_br  = [Int[] for _ in 1:nb]
 for (k, br) in enumerate(BR)
@@ -259,6 +269,7 @@ for (i, g) in enumerate(PV); push!(pv_at[g.bus, g.phase], i); end
                    - sum(Q[k, φ, t] for k in in_br[b];  init = zero(AffExpr)))
 
 # ========================= DROOP BLOCK : Heaviside — unchanged from single phase ========
+#  The IEEE 1547 curve of eq. (1), entering the host through eq. (30).
 #  The droop as ONE closed-form masked sum, with no extra variables at all. Windows
 #  W_b = H(v−VBP_b) − H(v−VBP_{b+1}) select the active segment; the sloped laws are
 #  anchored at their zero crossings, VBP[3] and VBP[4], so the pieces meet continuously.
@@ -279,7 +290,7 @@ vpv(i, t) = v[PV[i].bus, PV[i].phase, t]        # voltage this inverter actually
       - PV[i].Smax * (Hstep(vpv(i,t) - VBP[5]) - Hstep(vpv(i,t) - VBP[6])))
 # ================================ END DROOP BLOCK ======================================
 
-# ---- inverter capability: 16-segment polygon inscribing the apparent-power circle ------
+# ---- inverter capability, eq. (30): 16-segment polygon inscribing the S-circle ---------
 let k = 16
     for l in 1:k
         θ = l * π / k
@@ -291,7 +302,7 @@ let k = 16
 end
 @constraint(model, [i in 1:npv, t in 1:T], Pdg[i, t] <= Pavail[i, t])
 
-# ---- curtailment and objective ---------------------------------------------------------
+# ---- curtailment and objective, eq. (30) -----------------------------------------------
 @constraint(model, [i in 1:npv, t in 1:T], PVC[i, t] == Pavail[i, t] - Pdg[i, t])
 @objective(model, Min, sum(PVC))
 
@@ -322,7 +333,8 @@ for φ in PHASES
             minimum(V[:, φ, :]), maximum(V[:, φ, :]))
 end
 
-# ---- verification 1: every dispatch point must lie ON the droop curve ------------------
+# ---- verification 1: the droop-deviation metric Δ of eq. (29) --------------------------
+#      every dispatch point must lie ON the droop curve of its own inverter
 droop_q(vv, qb) = vv <= VBP[2] ? qb :
                   vv <= VBP[3] ? qb * (VBP[3] - vv) / (VBP[3] - VBP[2]) :
                   vv <= VBP[4] ? 0.0 :
